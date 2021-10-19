@@ -107,6 +107,7 @@ class VoiceState(commands.Cog):
             try:
                 async with timeout(180):
                     self.current = await self.queue.get()
+                    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
             except asyncio.TimeoutError:
                 return self.bot.loop.create_task(self.stop())
 
@@ -133,6 +134,7 @@ class VoiceState(commands.Cog):
 
     async def stop(self):
         self.queue._queue.clear()
+        await bot.change_presence(activity=None)
         if self.voice:
             await self.voice.disconnect()
             self.voice = None
@@ -397,6 +399,7 @@ class Music(commands.Cog):
         voice_state.queue._queue.clear()
         if voice_state.playing():
             voice_state.voice.stop()
+            await bot.change_presence(activity=None)
             await ctx.send('Voice State Stopped.')
 
     @cog_ext.cog_slash(
