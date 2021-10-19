@@ -56,8 +56,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
         data = await loop.run_in_executor(None, partial)
-        info = data['entries'][0] if 'entries' in data else data
-        return cls(ctx, discord.FFmpegPCMAudio(info['url'], **cls.FFMPEG_OPTS), data=info)
+        if 'entries' in data:
+            playlist = []
+            for entry in data['entries']:
+                playlist.append(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
+            return playlist
+        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS), data=data)
 
     @staticmethod
     def convert_duration(duration: int):
@@ -99,7 +103,7 @@ class VoiceState(commands.Cog):
         while True:
             self.next.clear()
             try:
-                async with timeout(30):
+                async with timeout(180):
                     self.current = await self.queue.get()
             except asyncio.TimeoutError:
                 return self.bot.loop.create_task(self.stop())
@@ -167,7 +171,10 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
-            await voice_state.queue.put(source)
+            if not isinstance(source, list):
+                return await voice_state.queue.put(source)
+            for entry in source:
+                await voice_state.queue.put(entry)
 
     @commands.command(name='pause')
     async def _pause(self, ctx: commands.Context):
