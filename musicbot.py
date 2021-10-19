@@ -60,10 +60,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
         data = await loop.run_in_executor(None, partial)
-        playlist = []
-        for entry in data['entries']:
-            playlist.append(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
-        return playlist
+        if 'entries' in data:
+            playlist = asyncio.Queue()
+            for entry in data['entries']:
+                await playlist.put(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
+            return playlist
+        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS), data=data)
 
     @staticmethod
     def convert_duration(duration: int):
@@ -190,17 +192,32 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='play',
         description='Plays or queues a song or playlist.',
-        guild_ids=[840757649002725386]
+        guild_ids=[840757649002725386],
+        options=[
+            create_option(
+                name='search',
+                description='search query',
+                required=True,
+                option_type=3
+            )
+        ]
     )
     async def _play(self, ctx: SlashContext, *, search: str):
+        await ctx.defer()
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             await ctx.invoke(self._connect)
 
         source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
-        for entry in source:
-            await voice_state.queue.put(entry)
-        await ctx.send('Playlist Queued.' if len(source) > 1 else 'Song Queued.')
+        if isinstance(source, asyncio.Queue):
+            length = 0
+            while not source.empty():
+                await voice_state.queue.put(source.get_nowait())
+                length += 1
+            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.')
+        else:
+            await voice_state.queue.put(source)
+            await ctx.send('Song Enqueued.')
 
     @cog_ext.cog_slash(
         name='pause',
@@ -286,7 +303,7 @@ class Music(commands.Cog):
         queue_string = ''
         for i, song in enumerate(queue_list[start:end], start=start):
             queue_string += f'`{i + 1}.` [**{song.data["title"]}**]({song.data["url"]})\n'
-        embed = (discord.Embed(description=f'**{len(queue_list)} Track List**\n\n{queue_string}')
+        embed = (discord.Embed(description=f'**Queue ({len(queue_list)})**\n\n{queue_string}')
                  .set_footer(text=f'Page {page}/{page_count}'))
         await ctx.send(embed=embed)
 
@@ -299,6 +316,8 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             return await ctx.send('Not Connected.')
+        if not voice_state.playing():
+            return await ctx.send('Nothing Playing.')
 
         await ctx.send(embed=voice_state.current.create_embed())
 
@@ -315,7 +334,7 @@ class Music(commands.Cog):
             )
         ]
     )
-    async def _volume(self, ctx: SlashContext, *, volume: float):
+    async def _volume(self, ctx: SlashContext, *, volume: int):
         if not self.kernel_id:
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
@@ -354,11 +373,12 @@ class Music(commands.Cog):
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Empty Queue.')
 
-        if ctx.author == voice_state.current.requester and index == 1:
+        queue = voice_state.queue._queue
+        if index == 1 and ctx.author == voice_state.current.requester:
             voice_state.skip()
             await ctx.send('Song Removed.')
-        elif ctx.author == voice_state.queue._queue[index - 2].requester:
-            del voice_state.queue._queue[index - 2]
+        elif ctx.author == queue[index - 2].requester:
+            del queue[index - 2]
             await ctx.send('Song Removed.')
         else:
             await ctx.send('Illegal Dequeue.')
