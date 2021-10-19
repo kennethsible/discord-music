@@ -60,12 +60,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
         data = await loop.run_in_executor(None, partial)
-        if 'entries' in data:
-            playlist = []
-            for entry in data['entries']:
-                playlist.append(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
-            return playlist
-        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS), data=data)
+        playlist = []
+        for entry in data['entries']:
+            playlist.append(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
+        return playlist
 
     @staticmethod
     def convert_duration(duration: int):
@@ -145,6 +143,8 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.voice_state = {}
+        self.kernel_event = asyncio.Event()
+        self.kernel_id = None
 
     def get_voice_state(self, ctx: SlashContext):
         try:
@@ -172,6 +172,10 @@ class Music(commands.Cog):
         ]
     )
     async def _connect(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
+        if not self.kernel_id and channel:
+            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+        self.kernel_event.set()
+        
         voice_state = self.get_voice_state(ctx)
 
         self.channel = channel or ctx.author.voice.channel
@@ -192,12 +196,9 @@ class Music(commands.Cog):
             await ctx.invoke(self._connect)
 
         source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
-        if not isinstance(source, list):
-            await ctx.send('Song Queued.')
-            return await voice_state.queue.put(source)
-        await ctx.send('Playlist Queued.')
         for entry in source:
             await voice_state.queue.put(entry)
+        await ctx.send('Playlist Queued.' if len(source) > 1 else 'Song Queued.')
 
     @cog_ext.cog_slash(
         name='pause',
@@ -275,7 +276,7 @@ class Music(commands.Cog):
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Queue Empty.')
 
-        page_total = 5
+        page_total = 4
         queue_list = [voice_state.current] + list(voice_state.queue._queue)
         page_count = math.ceil(len(queue_list) / page_total)
         start = (page - 1) * page_total
@@ -313,6 +314,10 @@ class Music(commands.Cog):
         ]
     )
     async def _volume(self, ctx: SlashContext, *, volume: float):
+        if not self.kernel_id:
+            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+        self.kernel_event.set()
+
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             return await ctx.send('Not Connected.')
@@ -362,6 +367,10 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _shuffle(self, ctx: SlashContext):
+        if not self.kernel_id:
+            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+        self.kernel_event.set()
+
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             return await ctx.send('Not Connected.')
@@ -377,6 +386,10 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _stop(self, ctx: SlashContext):
+        if not self.kernel_id:
+            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+        self.kernel_event.set()
+
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             return await ctx.send('Not Connected.')
@@ -392,6 +405,10 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _leave(self, ctx: SlashContext):
+        if not self.kernel_id:
+            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+        self.kernel_event.set()
+
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             return await ctx.send('Not Connected.')
@@ -399,6 +416,28 @@ class Music(commands.Cog):
         await voice_state.stop()
         del self.voice_state[ctx.guild.id]
         await ctx.send('Auf Wiedersehen!')
+
+    @cog_ext.cog_slash(
+        name='kernel',
+        description='Elevates a member to kernel mode.',
+        guild_ids=[840757649002725386]
+    )
+    async def _kernel(self, ctx: SlashContext):
+        if self.kernel_id:
+            if self.kernel_id == ctx.author.id:
+                return await ctx.send('You are already elevated to kernel mode.')
+            return await ctx.send('Please wait for kernel mode to be released.')
+
+        self.kernel_id = ctx.author.id
+        await ctx.send(f'<@{self.kernel_id}> **elevated** to kernel mode.')
+
+        try:
+            async with timeout(10):
+                await self.kernel_event.wait()
+        except asyncio.TimeoutError: pass
+        await ctx.send(f'<@{self.kernel_id}> **released** from kernel mode.')
+        self.kernel_event.clear()
+        self.kernel_id = None
 
 bot.add_cog(Music(bot))
 
