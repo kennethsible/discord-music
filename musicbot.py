@@ -448,5 +448,15 @@ bot.add_cog(Music(bot))
 async def on_ready():
     print(f'{bot.user.name} Initialized. ({bot.user.id})')
 
+music_room, bot_id = None, None
+with open('idref.txt', 'r') as id:
+    music_room, bot_id = int(id.readline()), int(id.readline())
+    
+@bot.event
+async def on_message(message):
+    global music_room, bot_id
+    if message.channel.id == music_room and message.author.id != bot_id:
+        await message.delete()
+
 with open('token.txt', 'r') as token:
     bot.run(token.readline())
