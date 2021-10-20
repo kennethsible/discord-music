@@ -8,7 +8,9 @@ from discord.ext import commands
 from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
 
-bot = commands.Bot(command_prefix='!')
+intents = discord.Intents.default()
+intents.members = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 slash = SlashCommand(bot, sync_commands=True)
 
 class VoiceConnectionError(commands.CommandError): pass
@@ -107,7 +109,7 @@ class VoiceState(commands.Cog):
         while True:
             self.next.clear()
             try:
-                async with timeout(180):
+                async with timeout(300):
                     self.current = await self.queue.get()
                     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
             except asyncio.TimeoutError:
@@ -119,6 +121,7 @@ class VoiceState(commands.Cog):
 
             await self.next.wait()
             self.current = None
+            await bot.change_presence(activity=None)
             try: await self.message.delete()
             except discord.HTTPException: pass
 
@@ -148,7 +151,9 @@ class Music(commands.Cog):
         self.bot = bot
         self.voice_state = {}
         self.kernel_event = asyncio.Event()
+        self.kernel_count = {}
         self.kernel_id = None
+        self.channel = None
 
     def get_voice_state(self, ctx: SlashContext):
         try:
@@ -176,9 +181,9 @@ class Music(commands.Cog):
         ]
     )
     async def _connect(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
-        if not self.kernel_id and channel:
+        if channel and (self.kernel_id != ctx.author.id):
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
-        self.kernel_event.set()
+        if channel: self.kernel_event.set()
         
         voice_state = self.get_voice_state(ctx)
 
@@ -260,18 +265,17 @@ class Music(commands.Cog):
             return await ctx.send('Nothing Playing.')
 
         member_count = math.ceil((len(bot.get_channel(self.channel.id).members) - 1)/2)
-        voter = ctx.author
-        if voter == voice_state.current.requester:
+        if ctx.author == voice_state.current.requester:
             voice_state.skip()
             await ctx.send('Song Skipped.')
-        elif voter.id not in voice_state.skip_count:
-            voice_state.skip_count.add(voter.id)
+        elif ctx.author.id not in voice_state.skip_count:
+            voice_state.skip_count.add(ctx.author.id)
             vote_count = len(voice_state.skip_count)
             if vote_count >= member_count:
                 voice_state.skip()
                 await ctx.send('Song Skipped.')
             else:
-                await ctx.send(f'Skip Vote **{vote_count}/{member_count}**.')
+                await ctx.send(f'Skip Vote at **{vote_count}/{member_count}**.')
         else:
             await ctx.send('Already Voted.')
 
@@ -335,7 +339,7 @@ class Music(commands.Cog):
         ]
     )
     async def _volume(self, ctx: SlashContext, *, volume: int):
-        if not self.kernel_id:
+        if self.kernel_id != ctx.author.id:
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
@@ -389,7 +393,7 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _shuffle(self, ctx: SlashContext):
-        if not self.kernel_id:
+        if self.kernel_id != ctx.author.id:
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
@@ -408,7 +412,7 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _stop(self, ctx: SlashContext):
-        if not self.kernel_id:
+        if self.kernel_id != ctx.author.id:
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
@@ -428,7 +432,7 @@ class Music(commands.Cog):
         guild_ids=[840757649002725386]
     )
     async def _leave(self, ctx: SlashContext):
-        if not self.kernel_id:
+        if self.kernel_id != ctx.author.id:
             return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
@@ -443,30 +447,50 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='kernel',
         description='Elevates a member to kernel mode.',
-        guild_ids=[840757649002725386]
+        guild_ids=[840757649002725386],
+        options=[
+            create_option(
+                name='user',
+                description='member id',
+                required=True,
+                option_type=6
+            )
+        ]
     )
-    async def _kernel(self, ctx: SlashContext):
+    async def _kernel(self, ctx: SlashContext, user: discord.User):
         if self.kernel_id:
             if self.kernel_id == ctx.author.id:
                 return await ctx.send('You are already elevated to kernel mode.')
             return await ctx.send('Please wait for kernel mode to be released.')
 
-        self.kernel_id = ctx.author.id
-        await ctx.send(f'<@{self.kernel_id}> **elevated** to kernel mode.')
+        if not ctx.author.guild_permissions.administrator:
+            member_count = math.ceil((len(bot.get_channel(self.channel.id).members) - 1)/2)
+            if user.id not in self.kernel_count:
+                self.kernel_count[user.id] = set()
+            if ctx.author.id not in self.kernel_count[user.id]:
+                self.kernel_count[user.id].add(ctx.author.id)
+                vote_count = len(self.kernel_count[user.id])
+                if vote_count < member_count:
+                    return await ctx.send(f'<@{user.id}> Kernel Vote at **{vote_count}/{member_count}**.')
+            else:
+                return await ctx.send('Already Voted.')
 
+        self.kernel_id = user.id
+        await ctx.send(f'<@{self.kernel_id}> **elevated** to kernel mode.')
         try:
             async with timeout(10):
                 await self.kernel_event.wait()
         except asyncio.TimeoutError: pass
         await ctx.send(f'<@{self.kernel_id}> **released** from kernel mode.')
         self.kernel_event.clear()
+        self.kernel_count.clear()
         self.kernel_id = None
 
 bot.add_cog(Music(bot))
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user.name} Initialized. ({bot.user.id})')
+    print(f'{bot.user.name} Initialized.')
 
 music_room, bot_id = None, None
 with open('idref.txt', 'r') as id:
