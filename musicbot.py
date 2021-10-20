@@ -1,19 +1,23 @@
 """ A Discord Music Bot """
 
 import discord, youtube_dl, asyncio
-import functools, random, math
+import functools, random, math, json
 from async_timeout import timeout
 from discord.ext import commands
 
 from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
+from discord_slash.error import SlashCommandError
+
+with open('id_dict.json', 'r') as file:
+    id_dict = json.load(file)
 
 intents = discord.Intents.default()
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 slash = SlashCommand(bot, sync_commands=True)
 
-class VoiceConnectionError(commands.CommandError): pass
+class VoiceConnectionError(SlashCommandError): pass
 
 class InvalidVoiceChannel(VoiceConnectionError): pass
 
@@ -38,7 +42,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
     FFMPEG_OPTS = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
         'options': '-vn',
-    }
+    } 
 
     ytdl = youtube_dl.YoutubeDL(YTDL_OPTS)
 
@@ -51,7 +55,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
     def create_embed(self):
         duration = self.convert_duration(self.data['duration'])
         return (discord.Embed(title='Now Playing',
-                              description=f'```css\n{self.data["title"]}\n```',
+                              description=f'[**{self.data["title"]}**]({self.data["webpage_url"]})\n',
                               color=discord.Color.blurple())
                  .add_field(name='Duration', value=duration)
                  .add_field(name='Requested By', value=self.requester.mention)
@@ -122,8 +126,8 @@ class VoiceState(commands.Cog):
             await self.next.wait()
             self.current = None
             await bot.change_presence(activity=None)
-            try: await self.message.delete()
-            except discord.HTTPException: pass
+            # try: await self.message.delete()
+            # except discord.HTTPException: pass
 
     def next_song(self, error=None):
         if error: raise VoiceConnectionError(str(error))
@@ -170,7 +174,7 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='connect',
         description='Connects to a voice channel.',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='channel',
@@ -181,27 +185,27 @@ class Music(commands.Cog):
         ]
     )
     async def _connect(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
+        await self.ensure_voice_state(ctx)
         if channel and (self.kernel_id != ctx.author.id):
-            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
         if channel: self.kernel_event.set()
-        
-        voice_state = self.get_voice_state(ctx)
 
+        voice_state = self.get_voice_state(ctx)
         self.channel = channel or ctx.author.voice.channel
         if voice_state.voice:
             await voice_state.voice.move_to(self.channel)
         else:
             voice_state.voice = await self.channel.connect()
-        await ctx.send('Connected.')
+        await ctx.send(f'Connected to <#{self.channel.id}>.')
 
     @cog_ext.cog_slash(
         name='play',
         description='Plays or queues a song or playlist.',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='search',
-                description='search query',
+                description='string query or direct link',
                 required=True,
                 option_type=3
             )
@@ -209,6 +213,7 @@ class Music(commands.Cog):
     )
     async def _play(self, ctx: SlashContext, *, search: str):
         await ctx.defer()
+        await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             await ctx.invoke(self._connect)
@@ -227,12 +232,11 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='pause',
         description='Pauses the current song.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _pause(self, ctx: SlashContext):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
 
         if voice_state.playing():
             voice_state.voice.pause()
@@ -241,12 +245,11 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='resume',
         description='Resumes a paused song.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _resume(self, ctx: SlashContext):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
 
         if voice_state.voice.is_paused():
             voice_state.voice.resume()
@@ -255,38 +258,38 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='skip',
         description='Skips the current song.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _skip(self, ctx: SlashContext):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
 
-        member_count = math.ceil((len(bot.get_channel(self.channel.id).members) - 1)/2)
+        member_count = len(bot.get_channel(self.channel.id).members) - 1
+        total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
         if ctx.author == voice_state.current.requester:
             voice_state.skip()
             await ctx.send('Song Skipped.')
         elif ctx.author.id not in voice_state.skip_count:
             voice_state.skip_count.add(ctx.author.id)
             vote_count = len(voice_state.skip_count)
-            if vote_count >= member_count:
+            if vote_count >= total:
                 voice_state.skip()
                 await ctx.send('Song Skipped.')
             else:
-                await ctx.send(f'Skip Vote at **{vote_count}/{member_count}**.')
+                await ctx.send(f'Skip Vote at **{vote_count}/{total}**.')
         else:
             await ctx.send('Already Voted.')
 
     @cog_ext.cog_slash(
         name='queue',
         description='Shows the queue (or a specific page).',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='page',
-                description='int',
+                description='int (see queue)',
                 required=False,
                 option_type=4
             )
@@ -294,8 +297,7 @@ class Music(commands.Cog):
     )
     async def _queue(self, ctx: SlashContext, *, page: int = 1):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Queue Empty.')
 
@@ -314,12 +316,11 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='current',
         description='Shows the current song.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _current(self, ctx: SlashContext):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
 
@@ -328,11 +329,11 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='volume',
         description='Sets the volume for the current song.',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
-                name='volume',
-                description='int between 0 and 100',
+                name='value',
+                description='0 <= volume <= 100',
                 required=True,
                 option_type=4
             )
@@ -340,16 +341,15 @@ class Music(commands.Cog):
     )
     async def _volume(self, ctx: SlashContext, *, volume: int):
         if self.kernel_id != ctx.author.id:
-            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
         if volume < 0 or volume > 100:
-            return await ctx.send('Between 0 and 100.')
+            return await ctx.send('0 <= volume <= 100.')
 
         voice_state.current.volume = volume / 100
         embed = discord.Embed(title="Volume Message",
@@ -360,11 +360,11 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='remove',
         description='Removes a song from the queue at a given index.',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='index',
-                description='int',
+                description='int (see queue)',
                 required=True,
                 option_type=4
             )
@@ -372,8 +372,7 @@ class Music(commands.Cog):
     )
     async def _remove(self, ctx: SlashContext, index: int):
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Empty Queue.')
 
@@ -390,16 +389,15 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='shuffle',
         description='Shuffles the queue.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _shuffle(self, ctx: SlashContext):
         if self.kernel_id != ctx.author.id:
-            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
         if voice_state.queue.empty():
             return await ctx.send('Empty Queue.')
 
@@ -409,16 +407,15 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='stop',
         description='Stops playing music and clears the queue.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _stop(self, ctx: SlashContext):
         if self.kernel_id != ctx.author.id:
-            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
 
         voice_state.queue._queue.clear()
         if voice_state.playing():
@@ -429,16 +426,15 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='leave',
         description='Clears the queue and leaves the channel.',
-        guild_ids=[840757649002725386]
+        guild_ids=[id_dict['guild']]
     )
     async def _leave(self, ctx: SlashContext):
         if self.kernel_id != ctx.author.id:
-            return await ctx.send('You cannot execute a privileged command outside of kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
         self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
-        if not voice_state.voice:
-            return await ctx.send('Not Connected.')
+        await self.ensure_connection(voice_state)
 
         await voice_state.stop()
         del self.voice_state[ctx.guild.id]
@@ -447,35 +443,36 @@ class Music(commands.Cog):
     @cog_ext.cog_slash(
         name='kernel',
         description='Elevates a member to kernel mode.',
-        guild_ids=[840757649002725386],
+        guild_ids=[id_dict['guild']],
         options=[
             create_option(
-                name='user',
-                description='member id',
+                name='member',
+                description='channel member',
                 required=True,
                 option_type=6
             )
         ]
     )
-    async def _kernel(self, ctx: SlashContext, user: discord.User):
+    async def _kernel(self, ctx: SlashContext, member: discord.User):
         if self.kernel_id:
             if self.kernel_id == ctx.author.id:
-                return await ctx.send('You are already elevated to kernel mode.')
-            return await ctx.send('Please wait for kernel mode to be released.')
+                raise SlashCommandError(f'{ctx.author.name} already elevated to kernel mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot request kernel mode during lockdown.')
 
         if not ctx.author.guild_permissions.administrator:
-            member_count = math.ceil((len(bot.get_channel(self.channel.id).members) - 1)/2)
-            if user.id not in self.kernel_count:
-                self.kernel_count[user.id] = set()
-            if ctx.author.id not in self.kernel_count[user.id]:
-                self.kernel_count[user.id].add(ctx.author.id)
-                vote_count = len(self.kernel_count[user.id])
-                if vote_count < member_count:
-                    return await ctx.send(f'<@{user.id}> Kernel Vote at **{vote_count}/{member_count}**.')
+            member_count = len(bot.get_channel(self.channel.id).members) - 1
+            total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
+            if member.id not in self.kernel_count:
+                self.kernel_count[member.id] = set()
+            if ctx.author.id not in self.kernel_count[member.id]:
+                self.kernel_count[member.id].add(ctx.author.id)
+                vote_count = len(self.kernel_count[member.id])
+                if vote_count < total:
+                    return await ctx.send(f'<@{member.id}> Kernel Vote at **{vote_count}/{total}**.')
             else:
                 return await ctx.send('Already Voted.')
 
-        self.kernel_id = user.id
+        self.kernel_id = member.id
         await ctx.send(f'<@{self.kernel_id}> **elevated** to kernel mode.')
         try:
             async with timeout(10):
@@ -486,20 +483,27 @@ class Music(commands.Cog):
         self.kernel_count.clear()
         self.kernel_id = None
 
+    async def ensure_connection(self, voice_state: VoiceState):
+        if not voice_state.voice:
+            raise SlashCommandError(f'{bot.user.name} not connected to a voice channel.')
+
+    async def ensure_voice_state(self, ctx: SlashContext):
+        voice_state = self.get_voice_state(ctx)
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            raise SlashCommandError(f'{ctx.author.name} isn\'t connected to a voice channel.')
+        if voice_state.voice:
+            if voice_state.voice.channel != ctx.author.voice.channel:
+                raise SlashCommandError(f'{bot.user.name} already connected to a voice channel.')
+
 bot.add_cog(Music(bot))
 
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} Initialized.')
-
-music_room, bot_id = None, None
-with open('idref.txt', 'r') as id:
-    music_room, bot_id = int(id.readline()), int(id.readline())
     
 @bot.event
 async def on_message(message):
-    global music_room, bot_id
-    if message.channel.id == music_room and message.author.id != bot_id:
+    if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
         await message.delete()
 
 with open('token.txt', 'r') as token:
