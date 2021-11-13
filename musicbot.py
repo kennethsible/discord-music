@@ -1,4 +1,4 @@
-""" A Discord Music Bot """
+""" A Discord Music Bot (and More!) """
 
 import discord, youtube_dl, asyncio
 import functools, random, math, json, re
@@ -13,8 +13,8 @@ from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
 from discord_slash.error import SlashCommandError
 
-with open('id_dict.json', 'r') as file:
-    id_dict = json.load(file)
+with open('id_dict.json') as id_file:
+    id_dict = json.load(id_file)
 
 intents = discord.Intents.default()
 intents.members = True
@@ -176,6 +176,11 @@ class Music(commands.Cog):
             self.voice_state[ctx.guild.id] = voice_state
         return voice_state
 
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
+            await message.delete()
+
     @cog_ext.cog_slash(
         name='connect',
         description='Connects to a voice channel.',
@@ -210,13 +215,13 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='search',
-                description='string query or direct link',
+                description='string',
                 required=True,
                 option_type=3
             )
         ]
     )
-    async def _play(self, ctx: SlashContext, *, search: str):
+    async def _play(self, ctx: SlashContext, search: str):
         await ctx.defer()
         await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
@@ -294,13 +299,13 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='page',
-                description='int (see queue)',
+                description='int > 0',
                 required=False,
                 option_type=4
             )
         ]
     )
-    async def _queue(self, ctx: SlashContext, *, page: int = 1):
+    async def _queue(self, ctx: SlashContext, page: int = 1):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
@@ -339,28 +344,23 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='value',
-                description='0 <= volume <= 100',
+                description='0 <= int <= 100',
                 required=True,
                 option_type=4
             )
         ]
     )
-    async def _volume(self, ctx: SlashContext, *, volume: int):
-        if self.kernel_id != ctx.author.id:
-            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        self.kernel_event.set()
-
+    async def _volume(self, ctx: SlashContext, value: int):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
-        if volume < 0 or volume > 100:
+        if value < 0 or value > 100:
             return await ctx.send('0 <= volume <= 100.')
 
-        voice_state.current.volume = volume / 100
-        embed = discord.Embed(title="Volume Message",
-        description=f'Volume Changed By **{ctx.author.name}**')
-        embed.add_field(name="Current Volume", value=volume, inline=True)
+        voice_state.current.volume = value / 100
+        embed = discord.Embed(title=f'Current Volume at {value}%',
+        description=f'Volume Changed by <@{ctx.author.id}>')
         await ctx.send(embed=embed)
 
     @cog_ext.cog_slash(
@@ -370,7 +370,7 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='index',
-                description='int (see queue)',
+                description='int',
                 required=True,
                 option_type=4
             )
@@ -453,7 +453,7 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='member',
-                description='channel member',
+                description='guild member',
                 required=True,
                 option_type=6
             )
@@ -501,8 +501,6 @@ class Music(commands.Cog):
             if voice_state.voice.channel != ctx.author.voice.channel:
                 raise SlashCommandError(f'{bot.user.name} already connected to a voice channel.')
 
-bot.add_cog(Music(bot))
-
 class RemindMe(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
@@ -541,70 +539,87 @@ class RemindMe(commands.Cog):
                 )
             ]
     )
-    async def _remindme(self, ctx: SlashContext, *, what: str, when: str):
+    async def _remindme(self, ctx: SlashContext, what: str, when: str):
         when_dt = timezone('EST').localize(parse(when))
         self.reminders.add((ctx.author, ctx.channel, what, when_dt))
         await ctx.send(f'I will message <@{ctx.author.id}> at {when_dt.strftime("%I:%M:%S %p")} on {when_dt.strftime("%m-%d-%Y")}!')
 
-bot.add_cog(RemindMe(bot))
+class QuoteBot(commands.Cog):
 
-@tasks.loop(minutes=30)
-async def estat_task(self):
-    with open('estats.json', 'w') as estats_file:
-        json.dump(estats, estats_file)
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        with open('quotes.json') as quotes_file:
+            self.quotes = Counter(json.load(quotes_file))
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        ##### Quote Bot #####
+        if message.author == bot.user: return
+        for qbot in self.quotes:
+            for alias in qbot.split(', '):
+                if alias in message.content.upper():
+                    await message.channel.send(random.choice(self.quotes[qbot])
+                        .replace('<@>', f'<@{message.author.id}>'))
+
+class EStatBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.update = False
+        with open('estats.json') as estats_file:
+            self.estats = Counter(json.load(estats_file))
+        self.estat_task.start()
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        ##### EStat Bot #####
+        if not self.update: self.update = True
+        emojis = re.findall(r'(<:[^:]+[^>]+>)', message.content)
+        if emojis: self.estats.update(emojis)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload):
+        if not self.update: self.update = True
+        self.estats.update(re.findall(r'(<:[^:]+[^>]+>)', str(payload.emoji)))
+
+    @tasks.loop(minutes=30)
+    async def estat_task(self):
+        if self.update:
+            with open('estats.json', 'w') as estats_file:
+                json.dump(self.estats, estats_file)
+            self.update = False
+
+    @cog_ext.cog_slash(
+        name='estat',
+        description='Shows emoji statistics for messages and reactions.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='page',
+                    description='int',
+                    required=False,
+                    option_type=4
+                )
+            ]
+    )
+    async def _estat(self, ctx: SlashContext, page: int = 1):
+        page_total = 5
+        page_count = math.ceil(len(self.estats) / page_total)
+        start = (page - 1) * page_total
+        end = start + page_total
+        description = ''
+        for i, (emoji, count) in enumerate(self.estats.most_common()[start:end], start=start):
+            description += f'`{i + 1}.` {emoji} \u2192 {count}\n'
+        embed = discord.Embed(title='Emoji Stats', description=description,
+            color=discord.Color.blue()).set_footer(text=f'Page {page}/{page_count}')
+        await ctx.send(embed=embed)
+
+for cog in (Music, RemindMe, QuoteBot, EStatBot):
+    bot.add_cog(cog(bot))
 
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} Initialized.')
 
-with open('estats.json') as estats_file, open('quotes.json') as quotes_file:
-    estats, quotes = Counter(json.load(estats_file)), json.load(quotes_file)
-
-@bot.event
-async def on_raw_reaction_add(payload):
-    estats.update(re.findall(r'<[^>]+>', str(payload.emoji)))
-
-@slash.slash(
-    name='estat',
-    description='Shows emoji statistics for messages and reactions.',
-    guild_ids=[id_dict['guild']],
-        options=[
-            create_option(
-                name='page',
-                description='int',
-                required=False,
-                option_type=4
-            )
-        ]
-)
-async def _estat(ctx: SlashContext, page: int = 1):
-    page_total = 5
-    page_count = math.ceil(len(estats) / page_total)
-    start = (page - 1) * page_total
-    end = start + page_total
-    description = ''
-    for i, (emoji, count) in enumerate(estats.most_common()[start:end], start=start):
-        description += f'`{i + 1}.` {emoji} \u2192 {count}\n'
-    embed = discord.Embed(title='Emoji Stats', description=description,
-        color=discord.Color.blue()).set_footer(text=f'Page {page}/{page_count}')
-    await ctx.send(embed=embed)
-
-@bot.event
-async def on_message(message):
-    if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
-        await message.delete()
-
-    ##### EStat Bot #####
-    emojis = re.findall(r'<[^>]+>', message.content)
-    if emojis: estats.update(emojis)
-
-    ##### Quote Bot #####
-    if message.author == bot.user: return
-    for qbot in quotes:
-        for alias in qbot.split(', '):
-            if alias in message.content.upper():
-                await message.channel.send(random.choice(quotes[qbot])
-                    .replace('<@>', f'<@{message.author.id}>'))
-
-with open('token.txt', 'r') as token:
+with open('token.txt') as token:
     bot.run(token.readline())
