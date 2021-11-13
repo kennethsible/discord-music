@@ -3,7 +3,10 @@
 import discord, youtube_dl, asyncio
 import functools, random, math, json
 from async_timeout import timeout
-from discord.ext import commands
+from discord.ext import commands, tasks
+from datetime import datetime
+from dateparser import parse
+from pytz import timezone
 
 from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
@@ -125,6 +128,7 @@ class VoiceState(commands.Cog):
 
             await self.next.wait()
             self.current = None
+            self.skip_count.clear()
             await bot.change_presence(activity=None)
             # try: await self.message.delete()
             # except discord.HTTPException: pass
@@ -278,7 +282,7 @@ class Music(commands.Cog):
                 voice_state.skip()
                 await ctx.send('Song Skipped.')
             else:
-                await ctx.send(f'Skip Vote at **{vote_count}/{total}**.')
+                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.')
         else:
             await ctx.send('Already Voted.')
 
@@ -497,14 +501,68 @@ class Music(commands.Cog):
 
 bot.add_cog(Music(bot))
 
+class RemindMe(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.reminders = set()
+        self.remind_task.start()
+
+    @tasks.loop(seconds=1)
+    async def remind_task(self):
+        now = timezone('EST').localize(datetime.now())
+        completed = set()
+        for reminder in self.reminders:
+            author, channel, message, when_dt = reminder
+            if abs((now - when_dt).total_seconds()) < 1.:
+                completed.add(reminder)
+                await channel.send(f'<@{author.id}> {message}')
+        for reminder in completed:
+            self.reminders.remove(reminder)
+
+    @cog_ext.cog_slash(
+        name='remindme',
+        description='Sets a reminder for a certain amount of time.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='what',
+                    description='message',
+                    required=True,
+                    option_type=3
+                ),
+                create_option(
+                    name='when',
+                    description='date/time',
+                    required=True,
+                    option_type=3
+                )
+            ]
+    )
+    async def _remindme(self, ctx: SlashContext, *, what: str, when: str):
+        when_dt = timezone('EST').localize(parse(when))
+        self.reminders.add((ctx.author, ctx.channel, what, when_dt))
+        await ctx.send(f'I will message <@{ctx.author.id}> at {when_dt.strftime("%I:%M:%S %p")} on {when_dt.strftime("%m-%d-%Y")}!')
+
+bot.add_cog(RemindMe(bot))
+
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} Initialized.')
-    
+
+quotes = json.load(open('quotes.json'))
+
 @bot.event
 async def on_message(message):
     if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
         await message.delete()
+    ##### Quote Bot #####
+    if message.author == bot.user: return
+    for qbot in quotes:
+        for alias in qbot.split(', '):
+            if alias in message.content.upper():
+                await message.channel.send(random.choice(quotes[qbot])
+                    .replace('<@>', f'<@{message.author.id}>'))
 
 with open('token.txt', 'r') as token:
     bot.run(token.readline())
