@@ -1,9 +1,10 @@
 """ A Discord Music Bot """
 
 import discord, youtube_dl, asyncio
-import functools, random, math, json
+import functools, random, math, json, re
 from async_timeout import timeout
 from discord.ext import commands, tasks
+from collections import Counter
 from datetime import datetime
 from dateparser import parse
 from pytz import timezone
@@ -305,16 +306,17 @@ class Music(commands.Cog):
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Queue Empty.')
 
-        page_total = 4
+        page_total = 5
         queue_list = [voice_state.current] + list(voice_state.queue._queue)
         page_count = math.ceil(len(queue_list) / page_total)
         start = (page - 1) * page_total
         end = start + page_total
-        queue_string = ''
+        description = ''
         for i, song in enumerate(queue_list[start:end], start=start):
-            queue_string += f'`{i + 1}.` [**{song.data["title"]}**]({song.data["url"]})\n'
-        embed = (discord.Embed(description=f'**Queue ({len(queue_list)})**\n\n{queue_string}')
-                 .set_footer(text=f'Page {page}/{page_count}'))
+            # description += f'`{i + 1}.` [**{song.data["title"]}**]({song.data["url"]})\n'
+            description += f'`{i + 1}.` **{song.data["title"]}**\n'
+        embed = discord.Embed(title=f'Queue ({len(queue_list)})', description=description,
+            color=discord.Color.red()).set_footer(text=f'Page {page}/{page_count}')
         await ctx.send(embed=embed)
 
     @cog_ext.cog_slash(
@@ -546,16 +548,56 @@ class RemindMe(commands.Cog):
 
 bot.add_cog(RemindMe(bot))
 
+@tasks.loop(minutes=30)
+async def estat_task(self):
+    with open('estats.json', 'w') as estats_file:
+        json.dump(estats, estats_file)
+
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} Initialized.')
 
-quotes = json.load(open('quotes.json'))
+with open('estats.json') as estats_file, open('quotes.json') as quotes_file:
+    estats, quotes = Counter(json.load(estats_file)), json.load(quotes_file)
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    estats.update(re.findall(r'<[^>]+>', str(payload.emoji)))
+
+@slash.slash(
+    name='estat',
+    description='Shows emoji statistics for messages and reactions.',
+    guild_ids=[id_dict['guild']],
+        options=[
+            create_option(
+                name='page',
+                description='int',
+                required=False,
+                option_type=4
+            )
+        ]
+)
+async def _estat(ctx: SlashContext, page: int = 1):
+    page_total = 5
+    page_count = math.ceil(len(estats) / page_total)
+    start = (page - 1) * page_total
+    end = start + page_total
+    description = ''
+    for i, (emoji, count) in enumerate(estats.most_common()[start:end], start=start):
+        description += f'`{i + 1}.` {emoji} \u2192 {count}\n'
+    embed = discord.Embed(title='Emoji Stats', description=description,
+        color=discord.Color.blue()).set_footer(text=f'Page {page}/{page_count}')
+    await ctx.send(embed=embed)
 
 @bot.event
 async def on_message(message):
     if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
         await message.delete()
+
+    ##### EStat Bot #####
+    emojis = re.findall(r'<[^>]+>', message.content)
+    if emojis: estats.update(emojis)
+
     ##### Quote Bot #####
     if message.author == bot.user: return
     for qbot in quotes:
