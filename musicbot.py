@@ -195,9 +195,9 @@ class Music(commands.Cog):
     )
     async def _connect(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
         await self.ensure_voice_state(ctx)
-        if channel and (self.kernel_id != ctx.author.id):
-            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        if channel: self.kernel_event.set()
+        # if channel and (self.kernel_id != ctx.author.id):
+        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
+        # if channel: self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
         self.channel = channel or ctx.author.voice.channel
@@ -205,7 +205,7 @@ class Music(commands.Cog):
             await voice_state.voice.move_to(self.channel)
         else:
             voice_state.voice = await self.channel.connect()
-        await ctx.send(f'Connected to <#{self.channel.id}>.')
+        await ctx.send(f'Connected to <#{self.channel.id}>.', hidden=True)
 
     @cog_ext.cog_slash(
         name='play',
@@ -221,7 +221,7 @@ class Music(commands.Cog):
         ]
     )
     async def _play(self, ctx: SlashContext, search: str):
-        await ctx.defer()
+        await ctx.defer(hidden=True)
         await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
@@ -233,10 +233,10 @@ class Music(commands.Cog):
             while not source.empty():
                 await voice_state.queue.put(source.get_nowait())
                 length += 1
-            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.')
+            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.', hidden=True)
         else:
             await voice_state.queue.put(source)
-            await ctx.send('Song Enqueued.')
+            await ctx.send('Song Enqueued.', hidden=True)
 
     @cog_ext.cog_slash(
         name='pause',
@@ -249,7 +249,7 @@ class Music(commands.Cog):
 
         if voice_state.playing():
             voice_state.voice.pause()
-            await ctx.send('Song Paused.')
+            await ctx.send('Song Paused.', hidden=True)
 
     @cog_ext.cog_slash(
         name='resume',
@@ -262,7 +262,7 @@ class Music(commands.Cog):
 
         if voice_state.voice.is_paused():
             voice_state.voice.resume()
-            await ctx.send('Song Resumed.')
+            await ctx.send('Song Resumed.', hidden=True)
 
     @cog_ext.cog_slash(
         name='skip',
@@ -273,23 +273,23 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
-            return await ctx.send('Nothing Playing.')
+            return await ctx.send('Nothing Playing.', hidden=True)
 
         member_count = len(bot.get_channel(self.channel.id).members) - 1
         total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
         if ctx.author == voice_state.current.requester:
             voice_state.skip()
-            await ctx.send('Song Skipped.')
+            await ctx.send('Song Skipped.', hidden=True)
         elif ctx.author.id not in voice_state.skip_count:
             voice_state.skip_count.add(ctx.author.id)
             vote_count = len(voice_state.skip_count)
             if vote_count >= total:
                 voice_state.skip()
-                await ctx.send('Song Skipped.')
+                await ctx.send('Song Skipped.', hidden=True)
             else:
-                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.')
+                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.', hidden=True)
         else:
-            await ctx.send('Already Voted.')
+            await ctx.send('Already Voted.', hidden=True)
 
     @cog_ext.cog_slash(
         name='queue',
@@ -308,7 +308,7 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
-            return await ctx.send('Queue Empty.')
+            return await ctx.send('Queue Empty.', hidden=True)
 
         page_total = 5
         queue_list = [voice_state.current] + list(voice_state.queue._queue)
@@ -321,7 +321,7 @@ class Music(commands.Cog):
             description += f'`{i + 1}.` **{song.data["title"]}**\n'
         embed = discord.Embed(title=f'Queue ({len(queue_list)})', description=description,
             color=discord.Color.red()).set_footer(text=f'Page {page}/{page_count}')
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, hidden=True)
 
     @cog_ext.cog_slash(
         name='current',
@@ -332,9 +332,9 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
-            return await ctx.send('Nothing Playing.')
+            return await ctx.send('Nothing Playing.', hidden=True)
 
-        await ctx.send(embed=voice_state.current.create_embed())
+        await ctx.send(embed=voice_state.current.create_embed(), hidden=True)
 
     @cog_ext.cog_slash(
         name='volume',
@@ -360,7 +360,7 @@ class Music(commands.Cog):
         voice_state.current.volume = value / 100
         embed = discord.Embed(title=f'Current Volume at {value}%',
         description=f'Volume Changed by <@{ctx.author.id}>')
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, hidden=True)
 
     @cog_ext.cog_slash(
         name='remove',
@@ -379,17 +379,17 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
-            return await ctx.send('Empty Queue.')
+            return await ctx.send('Empty Queue.', hidden=True)
 
         queue = voice_state.queue._queue
         if index == 1 and ctx.author == voice_state.current.requester:
             voice_state.skip()
-            await ctx.send('Song Removed.')
+            await ctx.send('Song Removed.', hidden=True)
         elif ctx.author == queue[index - 2].requester:
             del queue[index - 2]
-            await ctx.send('Song Removed.')
+            await ctx.send('Song Removed.', hidden=True)
         else:
-            await ctx.send('Illegal Dequeue.')
+            await ctx.send('Illegal Dequeue.', hidden=True)
 
     @cog_ext.cog_slash(
         name='shuffle',
@@ -397,17 +397,17 @@ class Music(commands.Cog):
         guild_ids=[id_dict['guild']]
     )
     async def _shuffle(self, ctx: SlashContext):
-        if self.kernel_id != ctx.author.id:
-            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        self.kernel_event.set()
+        # if self.kernel_id != ctx.author.id:
+        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
+        # self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty():
-            return await ctx.send('Empty Queue.')
+            return await ctx.send('Empty Queue.', hidden=True)
 
         random.shuffle(voice_state.queue._queue)
-        await ctx.send('Queue Shuffled.')
+        await ctx.send('Queue Shuffled.', hidden=True)
 
     @cog_ext.cog_slash(
         name='stop',
@@ -415,9 +415,9 @@ class Music(commands.Cog):
         guild_ids=[id_dict['guild']]
     )
     async def _stop(self, ctx: SlashContext):
-        if self.kernel_id != ctx.author.id:
-            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        self.kernel_event.set()
+        # if self.kernel_id != ctx.author.id:
+        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
+        # self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
@@ -426,7 +426,7 @@ class Music(commands.Cog):
         if voice_state.playing():
             voice_state.voice.stop()
             await bot.change_presence(activity=None)
-            await ctx.send('Voice State Stopped.')
+            await ctx.send('Voice State Stopped.', hidden=True)
 
     @cog_ext.cog_slash(
         name='leave',
@@ -434,35 +434,35 @@ class Music(commands.Cog):
         guild_ids=[id_dict['guild']]
     )
     async def _leave(self, ctx: SlashContext):
-        if self.kernel_id != ctx.author.id:
-            raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        self.kernel_event.set()
+        # if self.kernel_id != ctx.author.id:
+        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
+        # self.kernel_event.set()
 
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
 
         await voice_state.stop()
         del self.voice_state[ctx.guild.id]
-        await ctx.send('Auf Wiedersehen!')
+        await ctx.send('Disconnected.', hidden=True)
 
-    @cog_ext.cog_slash(
-        name='kernel',
-        description='Elevates a member to kernel mode.',
-        guild_ids=[id_dict['guild']],
-        options=[
-            create_option(
-                name='member',
-                description='user',
-                required=True,
-                option_type=6
-            )
-        ]
-    )
-    async def _kernel(self, ctx: SlashContext, member: discord.User):
+    # @cog_ext.cog_slash(
+    #     name='elevate',
+    #     description='Elevates a member to privileged mode.',
+    #     guild_ids=[id_dict['guild']],
+    #     options=[
+    #         create_option(
+    #             name='member',
+    #             description='user',
+    #             required=True,
+    #             option_type=6
+    #         )
+    #     ]
+    # )
+    async def _elevate(self, ctx: SlashContext, member: discord.User):
         if self.kernel_id:
             if self.kernel_id == ctx.author.id:
-                raise SlashCommandError(f'{ctx.author.name} already elevated to kernel mode.')
-            raise SlashCommandError(f'{ctx.author.name} cannot request kernel mode during lockdown.')
+                raise SlashCommandError(f'{ctx.author.name} already elevated to privileged mode.')
+            raise SlashCommandError(f'{ctx.author.name} cannot request elevation during lockdown.')
 
         if not ctx.author.guild_permissions.administrator:
             member_count = len(bot.get_channel(self.channel.id).members) - 1
@@ -473,17 +473,17 @@ class Music(commands.Cog):
                 self.kernel_count[member.id].add(ctx.author.id)
                 vote_count = len(self.kernel_count[member.id])
                 if vote_count < total:
-                    return await ctx.send(f'<@{member.id}> Kernel Vote at **{vote_count}/{total}**.')
+                    return await ctx.send(f'<@{member.id}> Elevation Vote at **{vote_count}/{total}**.', hidden=True)
             else:
-                return await ctx.send('Already Voted.')
+                return await ctx.send('Already Voted.', hidden=True)
 
         self.kernel_id = member.id
-        await ctx.send(f'<@{self.kernel_id}> **elevated** to kernel mode.')
+        await ctx.send(f'<@{self.kernel_id}> **elevated** to privileged mode.', hidden=True)
         try:
             async with timeout(10):
                 await self.kernel_event.wait()
         except asyncio.TimeoutError: pass
-        await ctx.send(f'<@{self.kernel_id}> **released** from kernel mode.')
+        await ctx.send(f'<@{self.kernel_id}> **released** from privileged mode.', hidden=True)
         self.kernel_event.clear()
         self.kernel_count.clear()
         self.kernel_id = None
