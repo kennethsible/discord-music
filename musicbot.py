@@ -622,6 +622,9 @@ class PollBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.emojis = ('\u0031\uFE0F\u20E3', '\u0032\uFE0F\u20E3', '\u0033\uFE0F\u20E3', '\u0034\uFE0F\u20E3',
+                       '\u0035\uFE0F\u20E3', '\u0036\uFE0F\u20E3', '\u0037\uFE0F\u20E3', '\u0038\uFE0F\u20E3',
+                       '\u0039\uFE0F\u20E3', '\U0001F51F')
 
     @cog_ext.cog_slash(
         name='poll',
@@ -652,13 +655,10 @@ class PollBot(commands.Cog):
             options = options.split(',')
             if len(options) > 10:
                 raise SlashCommandError(f'{ctx.author.name} provided too many options for a poll.')
-            for i, option in enumerate(options):
-                question += f'\n`{i}` {option.lstrip()}'
+            for emoji, option in zip(self.emojis, options):
+                question += f'\n{emoji} {option.lstrip()}'
             message = await ctx.send(question)
-            for i, emoji in enumerate((
-                    '\u0030\uFE0F\u20E3', '\u0031\uFE0F\u20E3', '\u0032\uFE0F\u20E3', '\u0033\uFE0F\u20E3',
-                    '\u0034\uFE0F\u20E3', '\u0035\uFE0F\u20E3', '\u0036\uFE0F\u20E3', '\u0037\uFE0F\u20E3',
-                    '\u0038\uFE0F\u20E3', '\u0039\uFE0F\u20E3')):
+            for i, emoji in enumerate(self.emojis):
                 await message.add_reaction(emoji)
                 if i == len(options) - 1: break
 
