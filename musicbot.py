@@ -16,9 +16,8 @@ from discord_slash.error import SlashCommandError
 with open('id_dict.json') as id_file:
     id_dict = json.load(id_file)
 
-intents = discord.Intents.default()
-intents.members = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', self_bot=True,
+    help_command=None, intents=discord.Intents.all())
 slash = SlashCommand(bot, sync_commands=True)
 
 class VoiceConnectionError(SlashCommandError): pass
@@ -453,7 +452,7 @@ class Music(commands.Cog):
         options=[
             create_option(
                 name='member',
-                description='guild member',
+                description='user',
                 required=True,
                 option_type=6
             )
@@ -553,7 +552,6 @@ class QuoteBot(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        ##### Quote Bot #####
         if message.author == bot.user: return
         for qbot in self.quotes:
             for alias in qbot.split(', '):
@@ -572,7 +570,6 @@ class EStatBot(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        ##### EStat Bot #####
         if not self.update: self.update = True
         emojis = re.findall(r'(<:[^:]+[^>]+>)', message.content)
         if emojis: self.estats.update(emojis)
@@ -614,7 +611,71 @@ class EStatBot(commands.Cog):
             color=discord.Color.blue()).set_footer(text=f'Page {page}/{page_count}')
         await ctx.send(embed=embed)
 
-for cog in (Music, RemindMe, QuoteBot, EStatBot):
+class PollBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @cog_ext.cog_slash(
+        name='poll',
+        description='Creates a simple emoji reaction poll.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='question',
+                    description='string',
+                    required=True,
+                    option_type=3
+                ),
+                create_option(
+                    name='options',
+                    description='string (comma-separated; max of 10)',
+                    required=False,
+                    option_type=3
+                )
+            ]
+    )
+    async def _poll(self, ctx: SlashContext, question: str, options: str = None):
+        question = f'**{question}**'
+        if options is None:
+            message = await ctx.send(question)
+            for emoji in ('\u2705', '\u274E'):
+                await message.add_reaction(emoji)
+        else:
+            options = options.split(',')
+            if len(options) > 10:
+                raise SlashCommandError(f'{ctx.author.name} provided too many options for a poll.')
+            for i, option in enumerate(options):
+                question += f'\n`{i}` {option.lstrip()}'
+            message = await ctx.send(question)
+            for i, emoji in enumerate((
+                    '\u0030\uFE0F\u20E3', '\u0031\uFE0F\u20E3', '\u0032\uFE0F\u20E3', '\u0033\uFE0F\u20E3',
+                    '\u0034\uFE0F\u20E3', '\u0035\uFE0F\u20E3', '\u0036\uFE0F\u20E3', '\u0037\uFE0F\u20E3',
+                    '\u0038\uFE0F\u20E3', '\u0039\uFE0F\u20E3')):
+                await message.add_reaction(emoji)
+                if i == len(options) - 1: break
+
+class PinBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload):
+        if str(payload.emoji) == '\U0001F4CC':
+            channel = await self.bot.fetch_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            await message.pin()
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload):
+        if str(payload.emoji) == '\U0001F4CC':
+            channel = await self.bot.fetch_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
+                await message.unpin()
+
+for cog in (Music, RemindMe, QuoteBot, EStatBot, PollBot, PinBot):
     bot.add_cog(cog(bot))
 
 @bot.event
