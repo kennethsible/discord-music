@@ -500,7 +500,7 @@ class Music(commands.Cog):
             if voice_state.voice.channel != ctx.author.voice.channel:
                 raise SlashCommandError(f'{bot.user.name} already connected to a voice channel.')
 
-class RemindMe(commands.Cog):
+class RemindBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -512,16 +512,16 @@ class RemindMe(commands.Cog):
         now = timezone('EST').localize(datetime.now())
         completed = set()
         for reminder in self.reminders:
-            author, channel, message, when_dt = reminder
-            if abs((now - when_dt).total_seconds()) < 1.:
+            who, channel, message, when = reminder
+            if abs((now - when).total_seconds()) < 1.:
                 completed.add(reminder)
-                await channel.send(f'<@{author.id}> {message}')
+                await channel.send(f'<@{who.id}> {message}')
         for reminder in completed:
             self.reminders.remove(reminder)
 
     @cog_ext.cog_slash(
-        name='remindme',
-        description='Sets a reminder for a certain amount of time.',
+        name='remind',
+        description='Sets a reminder for the specified date/time.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -535,13 +535,20 @@ class RemindMe(commands.Cog):
                     description='date/time',
                     required=True,
                     option_type=3
+                ),
+                create_option(
+                    name='who',
+                    description='user',
+                    required=False,
+                    option_type=6
                 )
             ]
     )
-    async def _remindme(self, ctx: SlashContext, what: str, when: str):
-        when_dt = timezone('EST').localize(parse(when))
-        self.reminders.add((ctx.author, ctx.channel, what, when_dt))
-        await ctx.send(f'I will message <@{ctx.author.id}> at {when_dt.strftime("%I:%M:%S %p")} on {when_dt.strftime("%m-%d-%Y")}!')
+    async def _remind(self, ctx: SlashContext, what: str, when: str, who: discord.User = None):
+        when = timezone('EST').localize(parse(when))
+        who  = ctx.author if who is None else who
+        self.reminders.add((who, ctx.channel, what, when))
+        await ctx.send(f'I\'ll message <@{who.id}> at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
 
 class QuoteBot(commands.Cog):
 
@@ -675,7 +682,7 @@ class PinBot(commands.Cog):
             if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
                 await message.unpin()
 
-for cog in (Music, RemindMe, QuoteBot, EStatBot, PollBot, PinBot):
+for cog in (Music, RemindBot, QuoteBot, EStatBot, PollBot, PinBot):
     bot.add_cog(cog(bot))
 
 @bot.event
