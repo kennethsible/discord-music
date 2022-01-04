@@ -505,6 +505,7 @@ class RemindBot(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.reminders = set()
+        self.sleep_timers = set()
         self.remind_task.start()
 
     @tasks.loop(seconds=1)
@@ -518,10 +519,17 @@ class RemindBot(commands.Cog):
                 await channel.send(f'<@{who.id}> {message}')
         for reminder in completed:
             self.reminders.remove(reminder)
+        for timer in self.sleep_timers:
+            who, when = timer
+            if abs((now - when).total_seconds()) < 1.:
+                completed.add(timer)
+                await who.move_to(None)
+        for timer in completed:
+            self.sleep_timers.remove(timer)
 
     @cog_ext.cog_slash(
         name='remind',
-        description='Sets a reminder for the specified date/time.',
+        description='Sets a reminder for a specific date/time.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -532,7 +540,7 @@ class RemindBot(commands.Cog):
                 ),
                 create_option(
                     name='when',
-                    description='date/time',
+                    description='date/time (in natural language)',
                     required=True,
                     option_type=3
                 ),
@@ -549,6 +557,24 @@ class RemindBot(commands.Cog):
         who  = ctx.author if who is None else who
         self.reminders.add((who, ctx.channel, what, when))
         await ctx.send(f'I\'ll message <@{who.id}> at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
+
+    @cog_ext.cog_slash(
+        name='sleep',
+        description='Sets a sleep timer to disconnect the member from a voice channel.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='when',
+                    description='time (in natural language)',
+                    required=True,
+                    option_type=3
+                )
+            ]
+    )
+    async def _sleep(self, ctx: SlashContext, when: str):
+        when =  timezone('EST').localize(parse(when))
+        self.sleep_timers.add((ctx.author, when))
+        await ctx.send(f'I\'ll disconnect <@{ctx.author.id}> at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
 
 class QuoteBot(commands.Cog):
 
