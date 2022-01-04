@@ -104,6 +104,7 @@ class VoiceState(commands.Cog):
         self.next  = asyncio.Event()
         self.queue = asyncio.Queue()
 
+        self.loop = False
         self.volume  = .5
         self.active  = True
         self.current = None
@@ -115,21 +116,26 @@ class VoiceState(commands.Cog):
     async def audio_task(self):
         while True:
             self.next.clear()
-            try:
-                async with timeout(300):
-                    self.current = await self.queue.get()
-                    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
-            except asyncio.TimeoutError:
-                return self.bot.loop.create_task(self.stop())
+            if not self.loop:
+                try:
+                    async with timeout(300):
+                        self.current = await self.queue.get()
+                        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
+                except asyncio.TimeoutError:
+                    return self.bot.loop.create_task(self.stop())
+            else:
+                self.current.original = discord.FFmpegPCMAudio(self.current.data['url'], **YTDLSource.FFMPEG_OPTS)
 
             self.current.volume = self.volume
             self.voice.play(self.current, after=self.next_song)
-            self.message = await self.current.channel.send(embed=self.current.create_embed())
+            if not self.loop:
+                self.message = await self.current.channel.send(embed=self.current.create_embed())
 
             await self.next.wait()
-            self.current = None
-            self.skip_count.clear()
-            await bot.change_presence(activity=None)
+            if not self.loop:
+                self.current = None
+                self.skip_count.clear()
+                await bot.change_presence(activity=None)
             # try: await self.message.delete()
             # except discord.HTTPException: pass
 
@@ -206,6 +212,18 @@ class Music(commands.Cog):
         else:
             voice_state.voice = await self.channel.connect()
         await ctx.send(f'Connected to <#{self.channel.id}>.', hidden=True)
+
+    @cog_ext.cog_slash(
+        name='loop',
+        description='Loops the current playing song.',
+        guild_ids=[id_dict['guild']]
+    )
+    async def _loop(self, ctx: SlashContext):
+        await self.ensure_voice_state(ctx)
+
+        voice_state = self.get_voice_state(ctx)
+        voice_state.loop = not voice_state.loop
+        await ctx.send(f"Looping ({'Enabled' if voice_state.loop else 'Disabled'}).")
 
     @cog_ext.cog_slash(
         name='play',
@@ -504,7 +522,7 @@ class RemindBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.reminders = set()
+        self.reminders = set() # TODO implement persistent reminders
         self.sleep_timers = set()
         self.remind_task.start()
 
@@ -556,7 +574,7 @@ class RemindBot(commands.Cog):
         when = timezone('EST').localize(parse(when))
         who  = ctx.author if who is None else who
         self.reminders.add((who, ctx.channel, what, when))
-        await ctx.send(f'I\'ll message <@{who.id}> at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
+        await ctx.send(f'<@{who.id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
 
     @cog_ext.cog_slash(
         name='sleep',
@@ -574,7 +592,7 @@ class RemindBot(commands.Cog):
     async def _sleep(self, ctx: SlashContext, when: str):
         when =  timezone('EST').localize(parse(when))
         self.sleep_timers.add((ctx.author, when))
-        await ctx.send(f'I\'ll disconnect <@{ctx.author.id}> at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
+        await ctx.send(f'<@{ctx.author.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
 
 class QuoteBot(commands.Cog):
 
@@ -593,6 +611,7 @@ class QuoteBot(commands.Cog):
                         .replace('<@>', f'<@{message.author.id}>'))
 
 class EStatBot(commands.Cog):
+    # TODO verify guild id and check for renamed emojis
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
