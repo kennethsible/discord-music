@@ -211,7 +211,7 @@ class Music(commands.Cog):
             await voice_state.voice.move_to(self.channel)
         else:
             voice_state.voice = await self.channel.connect()
-        await ctx.send(f'Connected to <#{self.channel.id}>.', hidden=True)
+        await ctx.send(f'Connected to <#{self.channel.id}>.')
 
     @cog_ext.cog_slash(
         name='loop',
@@ -239,7 +239,7 @@ class Music(commands.Cog):
         ]
     )
     async def _play(self, ctx: SlashContext, search: str):
-        await ctx.defer(hidden=True)
+        await ctx.defer()
         await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
@@ -251,10 +251,10 @@ class Music(commands.Cog):
             while not source.empty():
                 await voice_state.queue.put(source.get_nowait())
                 length += 1
-            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.', hidden=True)
+            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.')
         else:
             await voice_state.queue.put(source)
-            await ctx.send('Song Enqueued.', hidden=True)
+            await ctx.send('Song Enqueued.')
 
     @cog_ext.cog_slash(
         name='pause',
@@ -267,7 +267,7 @@ class Music(commands.Cog):
 
         if voice_state.playing():
             voice_state.voice.pause()
-            await ctx.send('Song Paused.', hidden=True)
+            await ctx.send('Song Paused.')
 
     @cog_ext.cog_slash(
         name='resume',
@@ -280,7 +280,7 @@ class Music(commands.Cog):
 
         if voice_state.voice.is_paused():
             voice_state.voice.resume()
-            await ctx.send('Song Resumed.', hidden=True)
+            await ctx.send('Song Resumed.')
 
     @cog_ext.cog_slash(
         name='skip',
@@ -291,23 +291,23 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
-            return await ctx.send('Nothing Playing.', hidden=True)
+            return await ctx.send('Nothing Playing.')
 
         member_count = len(bot.get_channel(self.channel.id).members) - 1
         total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
         if ctx.author == voice_state.current.requester:
             voice_state.skip()
-            await ctx.send('Song Skipped.', hidden=True)
+            await ctx.send('Song Skipped.')
         elif ctx.author.id not in voice_state.skip_count:
             voice_state.skip_count.add(ctx.author.id)
             vote_count = len(voice_state.skip_count)
             if vote_count >= total:
                 voice_state.skip()
-                await ctx.send('Song Skipped.', hidden=True)
+                await ctx.send('Song Skipped.')
             else:
-                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.', hidden=True)
+                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.')
         else:
-            await ctx.send('Already Voted.', hidden=True)
+            await ctx.send('Already Voted.')
 
     @cog_ext.cog_slash(
         name='queue',
@@ -326,7 +326,7 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
-            return await ctx.send('Queue Empty.', hidden=True)
+            return await ctx.send('Queue Empty.')
 
         page_total = 5
         queue_list = [voice_state.current] + list(voice_state.queue._queue)
@@ -339,7 +339,7 @@ class Music(commands.Cog):
             description += f'`{i + 1}.` **{song.data["title"]}**\n'
         embed = discord.Embed(title=f'Queue ({len(queue_list)})', description=description,
             color=discord.Color.red()).set_footer(text=f'Page {page}/{page_count}')
-        await ctx.send(embed=embed, hidden=True)
+        await ctx.send(embed=embed)
 
     @cog_ext.cog_slash(
         name='current',
@@ -350,9 +350,9 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
-            return await ctx.send('Nothing Playing.', hidden=True)
+            return await ctx.send('Nothing Playing.')
 
-        await ctx.send(embed=voice_state.current.create_embed(), hidden=True)
+        await ctx.send(embed=voice_state.current.create_embed())
 
     @cog_ext.cog_slash(
         name='volume',
@@ -378,7 +378,7 @@ class Music(commands.Cog):
         voice_state.current.volume = value / 100
         embed = discord.Embed(title=f'Current Volume at {value}%',
         description=f'Volume Changed by <@{ctx.author.id}>')
-        await ctx.send(embed=embed, hidden=True)
+        await ctx.send(embed=embed)
 
     @cog_ext.cog_slash(
         name='remove',
@@ -397,17 +397,17 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty() and not voice_state.playing():
-            return await ctx.send('Empty Queue.', hidden=True)
+            return await ctx.send('Empty Queue.')
 
         queue = voice_state.queue._queue
         if index == 1 and ctx.author == voice_state.current.requester:
             voice_state.skip()
-            await ctx.send('Song Removed.', hidden=True)
+            await ctx.send('Song Removed.')
         elif ctx.author == queue[index - 2].requester:
             del queue[index - 2]
-            await ctx.send('Song Removed.', hidden=True)
+            await ctx.send('Song Removed.')
         else:
-            await ctx.send('Illegal Dequeue.', hidden=True)
+            await ctx.send('Illegal Dequeue.')
 
     @cog_ext.cog_slash(
         name='shuffle',
@@ -422,10 +422,10 @@ class Music(commands.Cog):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if voice_state.queue.empty():
-            return await ctx.send('Empty Queue.', hidden=True)
+            return await ctx.send('Empty Queue.')
 
         random.shuffle(voice_state.queue._queue)
-        await ctx.send('Queue Shuffled.', hidden=True)
+        await ctx.send('Queue Shuffled.')
 
     @cog_ext.cog_slash(
         name='stop',
@@ -444,7 +444,7 @@ class Music(commands.Cog):
         if voice_state.playing():
             voice_state.voice.stop()
             await bot.change_presence(activity=None)
-            await ctx.send('Voice State Stopped.', hidden=True)
+            await ctx.send('Voice State Stopped.')
 
     @cog_ext.cog_slash(
         name='leave',
@@ -461,7 +461,7 @@ class Music(commands.Cog):
 
         await voice_state.stop()
         del self.voice_state[ctx.guild.id]
-        await ctx.send('Disconnected.', hidden=True)
+        await ctx.send('Disconnected.')
 
     # @cog_ext.cog_slash(
     #     name='elevate',
@@ -491,17 +491,17 @@ class Music(commands.Cog):
                 self.kernel_count[member.id].add(ctx.author.id)
                 vote_count = len(self.kernel_count[member.id])
                 if vote_count < total:
-                    return await ctx.send(f'<@{member.id}> Elevation Vote at **{vote_count}/{total}**.', hidden=True)
+                    return await ctx.send(f'<@{member.id}> Elevation Vote at **{vote_count}/{total}**.')
             else:
-                return await ctx.send('Already Voted.', hidden=True)
+                return await ctx.send('Already Voted.')
 
         self.kernel_id = member.id
-        await ctx.send(f'<@{self.kernel_id}> **elevated** to privileged mode.', hidden=True)
+        await ctx.send(f'<@{self.kernel_id}> **elevated** to privileged mode.')
         try:
             async with timeout(10):
                 await self.kernel_event.wait()
         except asyncio.TimeoutError: pass
-        await ctx.send(f'<@{self.kernel_id}> **released** from privileged mode.', hidden=True)
+        await ctx.send(f'<@{self.kernel_id}> **released** from privileged mode.')
         self.kernel_event.clear()
         self.kernel_count.clear()
         self.kernel_id = None
@@ -574,7 +574,7 @@ class RemindBot(commands.Cog):
         when = timezone('EST').localize(parse(when))
         who  = ctx.author if who is None else who
         self.reminders.add((who, ctx.channel, what, when))
-        await ctx.send(f'<@{who.id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
+        await ctx.send(f'<@{who.id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
 
     @cog_ext.cog_slash(
         name='sleep',
@@ -592,7 +592,7 @@ class RemindBot(commands.Cog):
     async def _sleep(self, ctx: SlashContext, when: str):
         when =  timezone('EST').localize(parse(when))
         self.sleep_timers.add((ctx.author, when))
-        await ctx.send(f'<@{ctx.author.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
+        await ctx.send(f'<@{ctx.author.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
 
 class QuoteBot(commands.Cog):
 
