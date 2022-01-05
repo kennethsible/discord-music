@@ -522,28 +522,38 @@ class RemindBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.reminders = set() # TODO implement persistent reminders
-        self.sleep_timers = set()
+        self.sleep_timers = []
+        with open('reminders.json') as reminders_file:
+            self.reminders = json.load(reminders_file)
         self.remind_task.start()
 
     @tasks.loop(seconds=1)
     async def remind_task(self):
+        def diff(A, B):
+            return [x for x in A if x not in B]
         now = timezone('EST').localize(datetime.now())
-        completed = set()
+        completed, reminded = [], False
         for reminder in self.reminders:
-            who, channel, message, when = reminder
+            who_id, channel_id, message, when = reminder
+            channel = self.bot.get_channel(channel_id)
+            when = datetime.fromisoformat(when)
             if abs((now - when).total_seconds()) < 1.:
-                completed.add(reminder)
-                await channel.send(f'<@{who.id}> {message}')
-        for reminder in completed:
-            self.reminders.remove(reminder)
+                completed.append(reminder)
+                await channel.send(f'<@{who_id}> {message}')
+                reminded = True
+        if len(completed) > 0:
+            self.reminders = diff(self.reminders, completed)
+        guild = self.bot.get_guild(id_dict['guild'])
         for timer in self.sleep_timers:
-            who, when = timer
+            who_id, when = timer
             if abs((now - when).total_seconds()) < 1.:
-                completed.add(timer)
-                await who.move_to(None)
-        for timer in completed:
-            self.sleep_timers.remove(timer)
+                completed.append(timer)
+                await guild.get_member(who_id).move_to(None)
+        if len(completed) > 0:
+            self.sleep_timers = diff(self.sleep_timers, completed)
+        if reminded:
+            with open('reminders.json', 'w') as reminders_file:
+                json.dump(list(self.reminders), reminders_file)
 
     @cog_ext.cog_slash(
         name='remind',
@@ -571,10 +581,12 @@ class RemindBot(commands.Cog):
             ]
     )
     async def _remind(self, ctx: SlashContext, what: str, when: str, who: discord.User = None):
+        who_id = ctx.author.id if who is None else who.id
         when = timezone('EST').localize(parse(when))
-        who  = ctx.author if who is None else who
-        self.reminders.add((who, ctx.channel, what, when))
-        await ctx.send(f'<@{who.id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
+        self.reminders.append((who_id, ctx.channel.id, what, when.isoformat()))
+        with open('reminders.json', 'w') as reminders_file:
+                json.dump(list(self.reminders), reminders_file)
+        await ctx.send(f'<@{who_id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
 
     @cog_ext.cog_slash(
         name='sleep',
@@ -590,8 +602,8 @@ class RemindBot(commands.Cog):
             ]
     )
     async def _sleep(self, ctx: SlashContext, when: str):
-        when =  timezone('EST').localize(parse(when))
-        self.sleep_timers.add((ctx.author, when))
+        when = timezone('EST').localize(parse(when))
+        self.sleep_timers.append((ctx.author.id, when))
         await ctx.send(f'<@{ctx.author.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
 
 class QuoteBot(commands.Cog):
