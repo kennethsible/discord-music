@@ -539,7 +539,7 @@ class RemindBot(commands.Cog):
             when = datetime.fromisoformat(when)
             if abs((now - when).total_seconds()) < 1.:
                 completed.append(reminder)
-                await channel.send(f'<@{who_id}> {message}')
+                await channel.send(f'**[Reminder]** <@{who_id}> {message}')
                 reminded = True
         if len(completed) > 0:
             self.reminders = diff(self.reminders, completed)
@@ -679,9 +679,17 @@ class PollBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.emojis = ('\u0031\uFE0F\u20E3', '\u0032\uFE0F\u20E3', '\u0033\uFE0F\u20E3', '\u0034\uFE0F\u20E3',
+        self.emojis = ['\u0031\uFE0F\u20E3', '\u0032\uFE0F\u20E3', '\u0033\uFE0F\u20E3', '\u0034\uFE0F\u20E3',
                        '\u0035\uFE0F\u20E3', '\u0036\uFE0F\u20E3', '\u0037\uFE0F\u20E3', '\u0038\uFE0F\u20E3',
-                       '\u0039\uFE0F\u20E3', '\U0001F51F')
+                       '\u0039\uFE0F\u20E3', '\U0001F51F']
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload):
+        channel = await self.bot.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+        if payload.emoji.name not in self.emojis + ['\u2705', '\u274E'] and '[Poll]' in message.content \
+                and message.author.id == id_dict['bot'] != payload.member.id:
+            await message.clear_reaction(payload.emoji)
 
     @cog_ext.cog_slash(
         name='poll',
@@ -703,7 +711,7 @@ class PollBot(commands.Cog):
             ]
     )
     async def _poll(self, ctx: SlashContext, question: str, options: str = None):
-        question = f'**{question}**'
+        question = f'**[Poll] {question}**'
         if options is None:
             message = await ctx.send(question)
             for emoji in ('\u2705', '\u274E'):
