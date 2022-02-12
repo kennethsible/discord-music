@@ -65,16 +65,21 @@ class YTDLSource(discord.PCMVolumeTransformer):
                  .set_thumbnail(url=self.data['thumbnail']))
 
     @classmethod
-    async def create_source(cls, ctx: SlashContext, search: str, *, loop: asyncio.BaseEventLoop = None):
+    async def create_source(cls, ctx: SlashContext, search: str, timestamp: str, *, loop: asyncio.BaseEventLoop = None):
         loop = loop or asyncio.get_event_loop()
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
         data = await loop.run_in_executor(None, partial)
+        FFMPEG_OPTS = cls.FFMPEG_OPTS.copy() if timestamp else cls.FFMPEG_OPTS
         if 'entries' in data:
             playlist = asyncio.Queue()
             for entry in data['entries']:
-                await playlist.put(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS), data=entry))
+                if timestamp and len(data['entries']) == 1:
+                    FFMPEG_OPTS['options'] += f' -ss {timestamp}'
+                await playlist.put(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **FFMPEG_OPTS), data=entry))
             return playlist
-        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS), data=data)
+        if timestamp:
+            FFMPEG_OPTS['options'] += f' -ss {timestamp}'
+        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTS), data=data)
 
     @staticmethod
     def convert_duration(duration: int):
@@ -235,17 +240,23 @@ class Music(commands.Cog):
                 description='string',
                 required=True,
                 option_type=3
+            ),
+            create_option(
+                name='timestamp',
+                description='ffmpeg format',
+                required=False,
+                option_type=3
             )
         ]
     )
-    async def _play(self, ctx: SlashContext, search: str):
+    async def _play(self, ctx: SlashContext, search: str, timestamp: str = None):
         await ctx.defer()
         await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
             await ctx.invoke(self._connect)
 
-        source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
+        source = await YTDLSource.create_source(ctx, search, timestamp, loop=self.bot.loop)
         if isinstance(source, asyncio.Queue):
             length = 0
             while not source.empty():
