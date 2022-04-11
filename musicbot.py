@@ -686,6 +686,55 @@ class EStatBot(commands.Cog):
             color=discord.Color.blue()).set_footer(text=f'Page {page}/{page_count}')
         await ctx.send(embed=embed)
 
+class WFreqBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @cog_ext.cog_slash(
+        name='wfreq',
+        description='Shows a list of most frequent words or n-grams.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='who',
+                    description='user',
+                    required=True,
+                    option_type=6
+                ),
+                create_option(
+                    name='length',
+                    description='int',
+                    required=False,
+                    option_type=4
+                ),
+                create_option(
+                    name='limit',
+                    description='int',
+                    required=False,
+                    option_type=4
+                )
+            ]
+    )
+    async def _wfreq(self, ctx: SlashContext, who: discord.User, *, length: int = 1, limit: int = None):
+        await ctx.defer()
+        messages = Counter()
+        async for message in ctx.channel.history(limit=limit):
+            if message.author.id == who.id:
+                msg = message.content.lower().split(' ')
+                if len(msg) == length:
+                    messages[' '.join(msg)] += 1
+                # for i in range(len(msg) - length + 1):
+                #     messages[' '.join(msg[i:(i + length)])] += 1
+        # messages = Counter([message.content for message in await ctx.channel.history(limit=limit).flatten()
+        #     if message.author.id == who.id and len(message.content.split(' ')) == length])
+        description = ''
+        for i, (ngram, count) in enumerate(messages.most_common()[:5]):
+            description += f'`{i + 1}.` {ngram} \u2192 {count}\n'
+        embed = discord.Embed(title=f'{length}-Gram Frequency', description=description,
+            color=discord.Color.green()).set_footer(text=who.display_name)
+        await ctx.send(embed=embed)
+
 class PollBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
@@ -758,7 +807,7 @@ class PinBot(commands.Cog):
             if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
                 await message.unpin()
 
-for cog in (Music, RemindBot, QuoteBot, EStatBot, PollBot, PinBot):
+for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, PollBot, PinBot):
     bot.add_cog(cog(bot))
 
 @bot.event
