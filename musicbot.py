@@ -716,22 +716,31 @@ class WFreqBot(commands.Cog):
                 )
             ]
     )
-    async def _wfreq(self, ctx: SlashContext, who: discord.User, *, length: int = 1, limit: int = None):
+    async def _wfreq(self, ctx: SlashContext, who: discord.User, *, length: int = None, limit: int = None):
         await ctx.defer()
         messages = Counter()
         async for message in ctx.channel.history(limit=limit):
             if message.author.id == who.id:
-                msg = message.content.lower().split(' ')
-                if len(msg) == length:
-                    messages[' '.join(msg)] += 1
+                string = message.content.lower()
+                if len(string) == 0: continue
+                words = string.split(' ')
+                if length is None or len(words) == length:
+                    messages[string] += 1
                 # for i in range(len(msg) - length + 1):
                 #     messages[' '.join(msg[i:(i + length)])] += 1
+        # async for message in ctx.channel.history(limit=limit):
+        #     if message.author.id == who.id:
+        #         msg = message.content.lower().split(' ')
+        #         for i in range(len(msg) - length + 1):
+        #             sub_msg = ' '.join(msg[i:(i + length)])
+        #             if sub_msg in messages:
+        #                 messages[sub_msg] += 1
         # messages = Counter([message.content for message in await ctx.channel.history(limit=limit).flatten()
         #     if message.author.id == who.id and len(message.content.split(' ')) == length])
         description = ''
         for i, (ngram, count) in enumerate(messages.most_common()[:5]):
             description += f'`{i + 1}.` {ngram} \u2192 {count}\n'
-        embed = discord.Embed(title=f'{length}-Gram Frequency', description=description,
+        embed = discord.Embed(title=f'{length if length else "N"}-Gram Frequency', description=description,
             color=discord.Color.green()).set_footer(text=who.display_name)
         await ctx.send(embed=embed)
 
