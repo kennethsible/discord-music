@@ -756,9 +756,16 @@ class PollBot(commands.Cog):
     async def on_raw_reaction_add(self, payload):
         channel = await self.bot.fetch_channel(payload.channel_id)
         message = await channel.fetch_message(payload.message_id)
-        if payload.emoji.name not in self.emojis + ['\u2705', '\u274E'] and '[Poll]' in message.content \
-                and message.author.id == id_dict['bot'] != payload.member.id:
-            await message.clear_reaction(payload.emoji)
+        if message.author.id == id_dict['bot'] != payload.member.id:
+            if ('[Poll]' in message.content or '[Multi-Poll]' in message.content) \
+                and payload.emoji.name not in self.emojis + ['\u2705', '\u274E']:
+                    await message.clear_reaction(payload.emoji)
+            if '[Poll]' in message.content:
+                for reaction in message.reactions:
+                    if reaction.emoji == payload.emoji.name: continue
+                    users = await reaction.users().flatten()
+                    if any(payload.user_id == user.id for user in users):
+                        return await message.remove_reaction(payload.emoji, payload.member)
 
     @cog_ext.cog_slash(
         name='poll',
@@ -773,14 +780,20 @@ class PollBot(commands.Cog):
                 ),
                 create_option(
                     name='options',
-                    description='string (comma-separated; max of 10)',
+                    description='comma-separated; max of 10',
                     required=False,
                     option_type=3
+                ),
+                create_option(
+                    name='multiple',
+                    description='allow multiple answers',
+                    required=False,
+                    option_type=5
                 )
             ]
     )
-    async def _poll(self, ctx: SlashContext, question: str, options: str = None):
-        question = f'**[Poll] {question}**'
+    async def _poll(self, ctx: SlashContext, question: str, options: str = None, multiple: bool = False):
+        question = f'**[{"Multi-" if multiple else ""}Poll] {question}**'
         if options is None:
             message = await ctx.send(question)
             for emoji in ('\u2705', '\u274E'):
