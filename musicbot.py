@@ -744,6 +744,52 @@ class WFreqBot(commands.Cog):
             color=discord.Color.green()).set_footer(text=who.display_name)
         await ctx.send(embed=embed)
 
+class RoleBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        with open('roles.json') as roles_file:
+            self.roles = json.load(roles_file, object_hook=lambda x: {int(i): x[i] for i in x})
+
+    @cog_ext.cog_slash(
+        name='role',
+        description='Creates a custom role and assigns that role to a member.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='who',
+                    description='user',
+                    required=True,
+                    option_type=6
+                ),
+                create_option(
+                    name='name',
+                    description='string',
+                    required=True,
+                    option_type=3
+                ),
+                create_option(
+                    name='color',
+                    description='string (hexadecimal)',
+                    required=True,
+                    option_type=3
+                )
+            ]
+    )
+    async def _role(self, ctx: SlashContext, who: discord.User, name: str, color: str):
+        if who.id in self.roles:
+            print('HERE')
+            role = ctx.guild.get_role(self.roles[who.id])
+            await role.edit(name=name, color=discord.Color(int('0x' + color, 16)))
+        else:
+            print('HERE 2')
+            role = await ctx.guild.create_role(name=name, color=discord.Color(int('0x' + color, 16)))
+            self.roles[who.id] = role.id
+            await who.add_roles(role)
+        await ctx.send(f'Created Role <@&{role.id}> for <@!{who.id}>.', allowed_mentions=discord.AllowedMentions.none())
+        with open('roles.json', 'w') as roles_file:
+            json.dump(self.roles, roles_file)
+
 class PollBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
@@ -829,7 +875,7 @@ class PinBot(commands.Cog):
             if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
                 await message.unpin()
 
-for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, PollBot, PinBot):
+for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot):
     bot.add_cog(cog(bot))
 
 @bot.event
