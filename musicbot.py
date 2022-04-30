@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime
 from dateparser import parse
 from pytz import timezone
+from libretranslatepy import LibreTranslateAPI
 
 from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
@@ -778,11 +779,9 @@ class RoleBot(commands.Cog):
     )
     async def _role(self, ctx: SlashContext, who: discord.User, name: str, color: str):
         if who.id in self.roles:
-            print('HERE')
             role = ctx.guild.get_role(self.roles[who.id])
             await role.edit(name=name, color=discord.Color(int('0x' + color, 16)))
         else:
-            print('HERE 2')
             role = await ctx.guild.create_role(name=name, color=discord.Color(int('0x' + color, 16)))
             self.roles[who.id] = role.id
             await who.add_roles(role)
@@ -875,7 +874,61 @@ class PinBot(commands.Cog):
             if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
                 await message.unpin()
 
-for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot):
+class TranslateBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.api = LibreTranslateAPI('https://translate.argosopentech.com/')
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        confidence, language = 0., ''
+        for lang in self.api.detect(message.content):
+            if lang['confidence'] > confidence:
+                confidence, language = lang['confidence'], lang['language']
+        if language != 'en':
+            translation = self.api.translate(message.content, language, 'en')
+            embed = discord.Embed(title=f'Translation [{language.upper()}-EN]', description=translation, color=discord.Color.green())
+            await message.reply(embed=embed)
+
+    @cog_ext.cog_slash(
+        name='translate',
+        description='Translates text from one natural language to another.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='text',
+                    description='string',
+                    required=True,
+                    option_type=3
+                ),
+                create_option(
+                    name='src',
+                    description='source language (default: auto-detect)',
+                    required=False,
+                    option_type=3
+                ),
+                create_option(
+                    name='tgt',
+                    description='target language (default: en)',
+                    required=False,
+                    option_type=3
+                )
+            ]
+    )
+    async def _translate(self, ctx: SlashContext, text: str, src: str = None, tgt: str = None):
+        if not src:
+            confidence, language = 0., ''
+            for lang in self.api.detect(text):
+                if lang['confidence'] > confidence:
+                    confidence, language = lang['confidence'], lang['language']
+            src = language
+        if not tgt: tgt = 'en'
+        translation = self.api.translate(text, src, tgt)
+        embed = discord.Embed(title=f'Translation [{src.upper()}-{tgt.upper()}]', description=translation, color=discord.Color.green())
+        await ctx.send(embed=embed)
+
+for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot):
     bot.add_cog(cog(bot))
 
 @bot.event
