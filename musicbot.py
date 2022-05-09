@@ -1,6 +1,6 @@
 """ A Discord Music Bot (and More!) """
 
-import discord, youtube_dl, asyncio
+import discord, youtube_dl, asyncio, requests
 import functools, random, math, json, re
 from async_timeout import timeout
 from discord.ext import commands, tasks
@@ -635,7 +635,6 @@ class QuoteBot(commands.Cog):
                         .replace('<@>', f'<@{message.author.id}>'))
 
 class EStatBot(commands.Cog):
-    # TODO verify guild id and check for renamed emojis
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -882,9 +881,9 @@ class TranslateBot(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        confidence, language = 0., ''
+        confidence, language = 0., 'en'
         for lang in self.api.detect(message.content):
-            if lang['confidence'] > confidence:
+            if lang['confidence'] > confidence and lang['language'] in ('de', 'es'):
                 confidence, language = lang['confidence'], lang['language']
         if language != 'en':
             translation = self.api.translate(message.content, language, 'en')
@@ -918,17 +917,42 @@ class TranslateBot(commands.Cog):
     )
     async def _translate(self, ctx: SlashContext, text: str, src: str = None, tgt: str = None):
         if not src:
-            confidence, language = 0., ''
+            confidence, language = 0., 'en'
             for lang in self.api.detect(text):
-                if lang['confidence'] > confidence:
+                if lang['confidence'] > confidence and lang['language'] in ('de', 'es'):
                     confidence, language = lang['confidence'], lang['language']
             src = language
         if not tgt: tgt = 'en'
+        if src not in ('de', 'es', 'en') or tgt not in ('de', 'es', 'en'):
+            return await ctx.send('Unsupported Language.')
         translation = self.api.translate(text, src, tgt)
         embed = discord.Embed(title=f'Translation [{src.upper()}-{tgt.upper()}]', description=translation, color=discord.Color.green())
         await ctx.send(embed=embed)
 
-for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot):
+class InsultBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.api_url = 'https://evilinsult.com/generate_insult.php?lang=en&type=json'
+
+    @cog_ext.cog_slash(
+        name='insult',
+        description='Translates text from one natural language to another.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='who',
+                    description='user',
+                    required=True,
+                    option_type=6
+                )
+            ]
+    )
+    async def _insult(self, ctx: SlashContext, who: discord.User):
+        response = requests.get(self.api_url)
+        await ctx.send(f'<@{who.id}> {json.loads(response.text)["insult"]}')
+
+for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot, InsultBot):
     bot.add_cog(cog(bot))
 
 @bot.event
