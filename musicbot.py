@@ -9,6 +9,7 @@ from datetime import datetime
 from dateparser import parse
 from pytz import timezone
 from libretranslatepy import LibreTranslateAPI
+from nltk.tokenize import word_tokenize
 
 from discord_slash import SlashCommand, SlashContext, cog_ext
 from discord_slash.utils.manage_commands import create_option
@@ -132,18 +133,56 @@ class VoiceState(commands.Cog):
             else:
                 self.current.original = discord.FFmpegPCMAudio(self.current.data['url'], **YTDLSource.FFMPEG_OPTS)
 
-            self.current.volume = self.volume
-            self.voice.play(self.current, after=self.next_song)
             if not self.loop:
                 self.message = await self.current.channel.send(embed=self.current.create_embed())
+                for emoji in ('\U000025B6', '\U000023F8', '\U000023ED', '\U0001F500', '\U0001F502'):
+                    await self.message.add_reaction(emoji)
+            self.current.volume = self.volume
+            self.voice.play(self.current, after=self.next_song)
 
             await self.next.wait()
             if not self.loop:
                 self.current = None
                 self.skip_count.clear()
                 await bot.change_presence(activity=None)
+            await self.message.clear_reactions()
             # try: await self.message.delete()
             # except discord.HTTPException: pass
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload):
+        if payload.user_id != id_dict['bot']:
+            channel = await self.bot.fetch_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            if str(payload.emoji) == '\U000025B6':
+                if self.voice.is_paused():
+                    self.voice.resume()
+                await message.remove_reaction(payload.emoji, payload.member)
+            if str(payload.emoji) == '\U000023F8':
+                self.voice.pause()
+                await message.remove_reaction(payload.emoji, payload.member)
+            if str(payload.emoji) == '\U000023ED':
+                if payload.member == self.current.requester:
+                    self.skip()
+                    await self.message.clear_reactions()
+                elif payload.user_id not in self.skip_count:
+                    self.skip_count.add(payload.user_id)
+                    if len(self.skip_count) >= 2:
+                        self.skip()
+                        await self.message.clear_reactions()
+            # if str(payload.emoji) == '\U000023F9':
+            #     self.queue._queue.clear()
+            #     if self.playing():
+            #         self.voice.stop()
+            #         await self.bot.change_presence(activity=None)
+            #         await self.message.clear_reactions()
+            if str(payload.emoji) == '\U0001F500':
+                if not self.queue.empty():
+                    random.shuffle(self.queue._queue)
+                await message.remove_reaction(payload.emoji, payload.member)
+            if str(payload.emoji) == '\U0001F502':
+                self.loop = not self.loop
+                await message.remove_reaction(payload.emoji, payload.member)
 
     def next_song(self, error=None):
         if error: raise VoiceConnectionError(str(error))
@@ -165,7 +204,7 @@ class VoiceState(commands.Cog):
             self.voice = None
             self.active = False
 
-class Music(commands.Cog):
+class MusicBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -180,10 +219,12 @@ class Music(commands.Cog):
             voice_state = self.voice_state[ctx.guild.id]
         except KeyError:
             voice_state = VoiceState(ctx)
+            self.bot.add_cog(voice_state)
             self.voice_state[ctx.guild.id] = voice_state
 
         if not voice_state or not voice_state.active:
             voice_state = VoiceState(ctx)
+            self.bot.add_cog(voice_state)
             self.voice_state[ctx.guild.id] = voice_state
         return voice_state
 
@@ -305,19 +346,16 @@ class Music(commands.Cog):
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
 
-        member_count = len(bot.get_channel(self.channel.id).members) - 1
-        total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
         if ctx.author == voice_state.current.requester:
             voice_state.skip()
             await ctx.send('Song Skipped.')
         elif ctx.author.id not in voice_state.skip_count:
             voice_state.skip_count.add(ctx.author.id)
-            vote_count = len(voice_state.skip_count)
-            if vote_count >= total:
+            if len(voice_state.skip_count) >= 2:
                 voice_state.skip()
                 await ctx.send('Song Skipped.')
             else:
-                await ctx.send(f'Skip Vote at **{vote_count}/{int(total)}**.')
+                await ctx.send(f'Skip Requested.')
         else:
             await ctx.send('Already Voted.')
 
@@ -598,7 +636,7 @@ class RemindBot(commands.Cog):
         self.reminders.append((who_id, ctx.channel.id, what, when.isoformat()))
         with open('reminders.json', 'w') as reminders_file:
                 json.dump(list(self.reminders), reminders_file)
-        await ctx.send(f'<@{who_id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
+        await ctx.send(f'<@{who_id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', hidden=True)
 
     @cog_ext.cog_slash(
         name='sleep',
@@ -630,7 +668,7 @@ class QuoteBot(commands.Cog):
         if message.author == bot.user: return
         for qbot in self.quotes:
             for alias in qbot.split(', '):
-                if alias in message.content.upper():
+                if alias.lower() in word_tokenize(message.content.lower()):
                     await message.channel.send(random.choice(self.quotes[qbot])
                         .replace('<@>', f'<@{message.author.id}>'))
 
@@ -883,7 +921,7 @@ class TranslateBot(commands.Cog):
     async def on_message(self, message):
         confidence, language = 0., 'en'
         for lang in self.api.detect(message.content):
-            if lang['confidence'] > confidence and lang['language'] in ('de', 'es'):
+            if lang['confidence'] > confidence and lang['language'] in ('de', 'es', 'ru'):
                 confidence, language = lang['confidence'], lang['language']
         if language != 'en':
             translation = self.api.translate(message.content, language, 'en')
@@ -919,11 +957,11 @@ class TranslateBot(commands.Cog):
         if not src:
             confidence, language = 0., 'en'
             for lang in self.api.detect(text):
-                if lang['confidence'] > confidence and lang['language'] in ('de', 'es'):
+                if lang['confidence'] > confidence and lang['language'] in ('de', 'es', 'ru'):
                     confidence, language = lang['confidence'], lang['language']
             src = language
         if not tgt: tgt = 'en'
-        if src not in ('de', 'es', 'en') or tgt not in ('de', 'es', 'en'):
+        if src not in ('de', 'es', 'ru', 'en') or tgt not in ('de', 'es', 'ru', 'en'):
             return await ctx.send('Unsupported Language.')
         translation = self.api.translate(text, src, tgt)
         embed = discord.Embed(title=f'Translation [{src.upper()}-{tgt.upper()}]', description=translation, color=discord.Color.green())
@@ -952,7 +990,29 @@ class InsultBot(commands.Cog):
         response = requests.get(self.api_url)
         await ctx.send(f'<@{who.id}> {json.loads(response.text)["insult"]}')
 
-for cog in (Music, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot, InsultBot):
+class AnnounceBot(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @cog_ext.cog_slash(
+        name='say',
+        description='Sends an public message, e.g. an announcement.',
+        guild_ids=[id_dict['guild']],
+            options=[
+                create_option(
+                    name='message',
+                    description='string',
+                    required=True,
+                    option_type=3
+                )
+            ]
+    )
+    async def _say(self, ctx: SlashContext, message: str):
+        await ctx.send('Message Sent.', hidden=True)
+        await ctx.channel.send(message)
+
+for cog in (MusicBot, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot, InsultBot, AnnounceBot):
     bot.add_cog(cog(bot))
 
 @bot.event
