@@ -1,19 +1,21 @@
 """ A Discord Music Bot (and More!) """
 
-import discord, youtube_dl, asyncio, requests
-import functools, random, math, json, re
 from async_timeout import timeout
 from discord.ext import commands, tasks
+from discord.utils import get
 from collections import Counter
 from datetime import datetime
 from dateparser import parse
 from pytz import timezone
-from libretranslatepy import LibreTranslateAPI
+from ytmusicapi import YTMusic
 from nltk.tokenize import word_tokenize
 
 from discord_slash import SlashCommand, SlashContext, cog_ext
-from discord_slash.utils.manage_commands import create_option
+from discord_slash.utils.manage_commands import create_option, create_choice
 from discord_slash.error import SlashCommandError
+
+import discord, asyncio, requests, youtube_dl
+import functools, random, math, json, re
 
 with open('id_dict.json') as id_file:
     id_dict = json.load(id_file)
@@ -51,10 +53,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     ytdl = youtube_dl.YoutubeDL(YTDL_OPTS)
 
-    def __init__(self, ctx: SlashContext, source: discord.FFmpegPCMAudio, *, data: dict):
+    def __init__(self, source: discord.FFmpegPCMAudio, channel: discord.VoiceChannel, author: discord.User, data: dict):
         super().__init__(source)
-        self.requester = ctx.author
-        self.channel = ctx.channel
+        self.channel = channel
+        self.author = author
         self.data = data
 
     def create_embed(self):
@@ -63,25 +65,26 @@ class YTDLSource(discord.PCMVolumeTransformer):
                               description=f'[**{self.data["title"]}**]({self.data["webpage_url"]})\n',
                               color=discord.Color.blurple())
                  .add_field(name='Duration', value=duration)
-                 .add_field(name='Requested By', value=self.requester.mention)
+                 .add_field(name='Requested By', value=self.author.mention)
                  .set_thumbnail(url=self.data['thumbnail']))
 
+    def clone(self):
+        source = discord.FFmpegPCMAudio(self.data['url'], **self.FFMPEG_OPTS)
+        return YTDLSource(source, self.channel, self.author, self.data)
+
     @classmethod
-    async def create_source(cls, ctx: SlashContext, search: str, timestamp: str, *, loop: asyncio.BaseEventLoop = None):
+    async def create_source(cls, ctx: SlashContext, search: str, *, loop: asyncio.BaseEventLoop = None):
         loop = loop or asyncio.get_event_loop()
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
         data = await loop.run_in_executor(None, partial)
-        FFMPEG_OPTS = cls.FFMPEG_OPTS.copy() if timestamp else cls.FFMPEG_OPTS
         if 'entries' in data:
             playlist = asyncio.Queue()
             for entry in data['entries']:
-                if timestamp and len(data['entries']) == 1:
-                    FFMPEG_OPTS['options'] += f' -ss {timestamp}'
-                await playlist.put(cls(ctx, discord.FFmpegPCMAudio(entry['url'], **FFMPEG_OPTS), data=entry))
+                source = discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS)
+                await playlist.put(cls(source, ctx.channel, ctx.author, entry))
             return playlist
-        if timestamp:
-            FFMPEG_OPTS['options'] += f' -ss {timestamp}'
-        return cls(ctx, discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTS), data=data)
+        source = discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS)
+        return cls(source, ctx.channel, ctx.author, data)
 
     @staticmethod
     def convert_duration(duration: int):
@@ -111,7 +114,7 @@ class VoiceState(commands.Cog):
         self.next  = asyncio.Event()
         self.queue = asyncio.Queue()
 
-        self.loop = False
+        self.loop    = False
         self.volume  = .5
         self.active  = True
         self.current = None
@@ -123,28 +126,22 @@ class VoiceState(commands.Cog):
     async def audio_task(self):
         while True:
             self.next.clear()
-            if not self.loop:
-                try:
-                    async with timeout(300):
-                        self.current = await self.queue.get()
-                        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
-                except asyncio.TimeoutError:
-                    return self.bot.loop.create_task(self.stop())
-            else:
-                self.current.original = discord.FFmpegPCMAudio(self.current.data['url'], **YTDLSource.FFMPEG_OPTS)
+            try:
+                async with timeout(300):
+                    self.current = await self.queue.get()
+                    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=self.current.data['title']))
+            except asyncio.TimeoutError:
+                return self.bot.loop.create_task(self.stop())
 
-            if not self.loop:
-                self.message = await self.current.channel.send(embed=self.current.create_embed())
-                for emoji in ('\U000025B6', '\U000023F8', '\U000023ED', '\U0001F500', '\U0001F502'):
-                    await self.message.add_reaction(emoji)
+            self.message = await self.current.channel.send(embed=self.current.create_embed())
+            for emoji in ('\U000023EF', '\U000023ED', '\U000023F9', '\U0001F500', '\U0001F502'):
+                await self.message.add_reaction(emoji)
             self.current.volume = self.volume
             self.voice.play(self.current, after=self.next_song)
 
             await self.next.wait()
-            if not self.loop:
-                self.current = None
-                self.skip_count.clear()
-                await bot.change_presence(activity=None)
+            self.skip_count.clear()
+            await bot.change_presence(activity=None)
             await self.message.clear_reactions()
             # try: await self.message.delete()
             # except discord.HTTPException: pass
@@ -154,15 +151,12 @@ class VoiceState(commands.Cog):
         if payload.user_id != id_dict['bot']:
             channel = await self.bot.fetch_channel(payload.channel_id)
             message = await channel.fetch_message(payload.message_id)
-            if str(payload.emoji) == '\U000025B6':
-                if self.voice.is_paused():
-                    self.voice.resume()
-                await message.remove_reaction(payload.emoji, payload.member)
-            if str(payload.emoji) == '\U000023F8':
-                self.voice.pause()
-                await message.remove_reaction(payload.emoji, payload.member)
-            if str(payload.emoji) == '\U000023ED':
-                if payload.member == self.current.requester:
+            if str(payload.emoji) == '\U000023EF':
+                if not self.voice.is_paused():
+                    self.voice.pause()
+            elif str(payload.emoji) == '\U000023ED':
+                self.loop = False
+                if payload.member == self.current.author:
                     self.skip()
                     await self.message.clear_reactions()
                 elif payload.user_id not in self.skip_count:
@@ -170,23 +164,40 @@ class VoiceState(commands.Cog):
                     if len(self.skip_count) >= 2:
                         self.skip()
                         await self.message.clear_reactions()
-            # if str(payload.emoji) == '\U000023F9':
-            #     self.queue._queue.clear()
-            #     if self.playing():
-            #         self.voice.stop()
-            #         await self.bot.change_presence(activity=None)
-            #         await self.message.clear_reactions()
-            if str(payload.emoji) == '\U0001F500':
+            elif str(payload.emoji) == '\U000023F9':
+                self.queue._queue.clear()
+                if self.playing():
+                    self.voice.stop()
+                    await self.bot.change_presence(activity=None)
+                    await self.message.clear_reactions()
+            elif str(payload.emoji) == '\U0001F500':
                 if not self.queue.empty():
                     random.shuffle(self.queue._queue)
                 await message.remove_reaction(payload.emoji, payload.member)
-            if str(payload.emoji) == '\U0001F502':
-                self.loop = not self.loop
-                await message.remove_reaction(payload.emoji, payload.member)
+            elif str(payload.emoji) == '\U0001F502':
+                self.loop = True
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload):
+        channel = await self.bot.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+        if str(payload.emoji) == '\U000023EF':
+            reaction = get(message.reactions, emoji=payload.emoji.name)
+            if reaction.count < 2:
+                self.voice.resume()
+        elif str(payload.emoji) == '\U0001F502':
+            reaction = get(message.reactions, emoji=payload.emoji.name)
+            if reaction.count < 2:
+                self.loop = False
 
     def next_song(self, error=None):
         if error: raise VoiceConnectionError(str(error))
-        self.next.set()
+        if self.loop:
+            # https://github.com/Rapptz/discord.py/issues/4003
+            self.current = self.current.clone()
+            self.current.volume = self.volume
+            self.voice.play(self.current, after=self.next_song)
+        else: self.next.set()
 
     def playing(self):
         return self.voice and self.current
@@ -208,165 +219,74 @@ class MusicBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.voice_state = {}
-        self.kernel_event = asyncio.Event()
-        self.kernel_count = {}
-        self.kernel_id = None
-        self.channel = None
+        self.ytmusic = YTMusic()
+        self.voice_state = None
 
     def get_voice_state(self, ctx: SlashContext):
-        try:
-            voice_state = self.voice_state[ctx.guild.id]
-        except KeyError:
+        if not self.voice_state or not self.voice_state.active:
             voice_state = VoiceState(ctx)
             self.bot.add_cog(voice_state)
-            self.voice_state[ctx.guild.id] = voice_state
-
-        if not voice_state or not voice_state.active:
-            voice_state = VoiceState(ctx)
-            self.bot.add_cog(voice_state)
-            self.voice_state[ctx.guild.id] = voice_state
-        return voice_state
+            self.voice_state = voice_state
+        return self.voice_state
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.channel.id == id_dict['music_room'] and message.author.id != id_dict['bot']:
+        if message.channel.id == id_dict['music-room'] and message.author.id != id_dict['bot']:
             await message.delete()
 
     @cog_ext.cog_slash(
-        name='connect',
-        description='Connects to a voice channel.',
-        guild_ids=[id_dict['guild']],
-        options=[
-            create_option(
-                name='channel',
-                description='voice channel',
-                required=False,
-                option_type=7
-            )
-        ]
-    )
-    async def _connect(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
-        await self.ensure_voice_state(ctx)
-        # if channel and (self.kernel_id != ctx.author.id):
-        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
-        # if channel: self.kernel_event.set()
-
-        voice_state = self.get_voice_state(ctx)
-        self.channel = channel or ctx.author.voice.channel
-        if voice_state.voice:
-            await voice_state.voice.move_to(self.channel)
-        else:
-            voice_state.voice = await self.channel.connect()
-        await ctx.send(f'Connected to <#{self.channel.id}>.')
-
-    @cog_ext.cog_slash(
-        name='loop',
-        description='Loops the current playing song.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _loop(self, ctx: SlashContext):
-        await self.ensure_voice_state(ctx)
-
-        voice_state = self.get_voice_state(ctx)
-        voice_state.loop = not voice_state.loop
-        await ctx.send(f"Looping ({'Enabled' if voice_state.loop else 'Disabled'}).")
-
-    @cog_ext.cog_slash(
         name='play',
-        description='Plays or queues a song or playlist.',
+        description='Play a song or video from YouTube.',
         guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='search',
-                description='string',
+                description='string or YouTube URL',
                 required=True,
                 option_type=3
             ),
             create_option(
-                name='timestamp',
-                description='ffmpeg format',
+                name='source',
+                description='audio source',
                 required=False,
-                option_type=3
+                option_type=4,
+                choices=[
+                    create_choice(value=0, name="YouTube"),
+                    create_choice(value=1, name="YouTube Music")
+                ]
             )
         ]
     )
-    async def _play(self, ctx: SlashContext, search: str, timestamp: str = None):
+    async def _play(self, ctx: SlashContext, search: str, source: int = 0):
         await ctx.defer()
         await self.ensure_voice_state(ctx)
         voice_state = self.get_voice_state(ctx)
         if not voice_state.voice:
-            await ctx.invoke(self._connect)
+            channel = ctx.author.voice.channel
+            voice_state.voice = await channel.connect()
 
-        source = await YTDLSource.create_source(ctx, search, timestamp, loop=self.bot.loop)
+        if source == 1: # YouTube Music
+            search = 'https://music.youtube.com/watch?v=' \
+                + self.ytmusic.search(search, filter='songs')[0]['videoId']
+        source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
         if isinstance(source, asyncio.Queue):
-            length = 0
+            queue_size = 0
             while not source.empty():
                 await voice_state.queue.put(source.get_nowait())
-                length += 1
-            await ctx.send('Playlist Enqueued.' if length > 1 else 'Song Enqueued.')
+                queue_size += 1
+            await ctx.send('Playlist Enqueued.' if queue_size > 1 else 'Song Enqueued.')
         else:
             await voice_state.queue.put(source)
             await ctx.send('Song Enqueued.')
 
     @cog_ext.cog_slash(
-        name='pause',
-        description='Pauses the current song.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _pause(self, ctx: SlashContext):
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-
-        if voice_state.playing():
-            voice_state.voice.pause()
-            await ctx.send('Song Paused.')
-
-    @cog_ext.cog_slash(
-        name='resume',
-        description='Resumes a paused song.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _resume(self, ctx: SlashContext):
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-
-        if voice_state.voice.is_paused():
-            voice_state.voice.resume()
-            await ctx.send('Song Resumed.')
-
-    @cog_ext.cog_slash(
-        name='skip',
-        description='Skips the current song.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _skip(self, ctx: SlashContext):
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-        if not voice_state.playing():
-            return await ctx.send('Nothing Playing.')
-
-        if ctx.author == voice_state.current.requester:
-            voice_state.skip()
-            await ctx.send('Song Skipped.')
-        elif ctx.author.id not in voice_state.skip_count:
-            voice_state.skip_count.add(ctx.author.id)
-            if len(voice_state.skip_count) >= 2:
-                voice_state.skip()
-                await ctx.send('Song Skipped.')
-            else:
-                await ctx.send(f'Skip Requested.')
-        else:
-            await ctx.send('Already Voted.')
-
-    @cog_ext.cog_slash(
         name='queue',
-        description='Shows the queue (or a specific page).',
+        description='Show the current queue of songs or videos.',
         guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='page',
-                description='int > 0',
+                description='page number',
                 required=False,
                 option_type=4
             )
@@ -378,66 +298,52 @@ class MusicBot(commands.Cog):
         if voice_state.queue.empty() and not voice_state.playing():
             return await ctx.send('Queue Empty.')
 
-        page_total = 5
         queue_list = [voice_state.current] + list(voice_state.queue._queue)
-        page_count = math.ceil(len(queue_list) / page_total)
-        start = (page - 1) * page_total
-        end = start + page_total
+        page_count = math.ceil(len(queue_list) / 5)
+        start = (page - 1) * 5
+
         description = ''
-        for i, song in enumerate(queue_list[start:end], start=start):
-            # description += f'`{i + 1}.` [**{song.data["title"]}**]({song.data["url"]})\n'
+        for i, song in enumerate(queue_list[start:(start + 5)], start=start):
             description += f'`{i + 1}.` **{song.data["title"]}**\n'
         embed = discord.Embed(title=f'Queue ({len(queue_list)})', description=description,
             color=discord.Color.red()).set_footer(text=f'Page {page}/{page_count}')
         await ctx.send(embed=embed)
 
     @cog_ext.cog_slash(
-        name='current',
-        description='Shows the current song.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _current(self, ctx: SlashContext):
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-        if not voice_state.playing():
-            return await ctx.send('Nothing Playing.')
-
-        await ctx.send(embed=voice_state.current.create_embed())
-
-    @cog_ext.cog_slash(
         name='volume',
-        description='Sets the volume for the current song.',
+        description='Set the volume of the current song or video.',
         guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='value',
-                description='0 <= int <= 100',
-                required=True,
+                description='volume from 0 to 100',
+                required=False,
                 option_type=4
             )
         ]
     )
-    async def _volume(self, ctx: SlashContext, value: int):
+    async def _volume(self, ctx: SlashContext, value: int = None):
         voice_state = self.get_voice_state(ctx)
         await self.ensure_connection(voice_state)
         if not voice_state.playing():
             return await ctx.send('Nothing Playing.')
+        if value is None:
+            return await ctx.send(f'Current Volume ({int(voice_state.volume * 100)}).')
         if value < 0 or value > 100:
-            return await ctx.send('0 <= volume <= 100.')
+            return await ctx.send('Invalid Volume.')
 
-        voice_state.current.volume = value / 100
-        embed = discord.Embed(title=f'Current Volume at {value}%',
-        description=f'Volume Changed by <@{ctx.author.id}>')
-        await ctx.send(embed=embed)
+        # voice_state.volume = value / 100 # global change
+        voice_state.current.volume = voice_state.volume
+        await ctx.send(f'Volume Changed ({value}).')
 
     @cog_ext.cog_slash(
         name='remove',
-        description='Removes a song from the queue at a given index.',
+        description='Remove a song or video from the queue.',
         guild_ids=[id_dict['guild']],
         options=[
             create_option(
                 name='index',
-                description='int',
+                description='position in the queue',
                 required=True,
                 option_type=4
             )
@@ -450,111 +356,36 @@ class MusicBot(commands.Cog):
             return await ctx.send('Empty Queue.')
 
         queue = voice_state.queue._queue
-        if index == 1 and ctx.author == voice_state.current.requester:
+        if index == 1 and ctx.author == voice_state.current.author:
             voice_state.skip()
             await ctx.send('Song Removed.')
-        elif ctx.author == queue[index - 2].requester:
+        elif ctx.author == queue[index - 2].author:
             del queue[index - 2]
             await ctx.send('Song Removed.')
         else:
             await ctx.send('Illegal Dequeue.')
 
     @cog_ext.cog_slash(
-        name='shuffle',
-        description='Shuffles the queue.',
-        guild_ids=[id_dict['guild']]
+        name='move',
+        description='Move from one voice channel to another.',
+        guild_ids=[id_dict['guild']],
+        options=[
+            create_option(
+                name='channel',
+                description='voice channel',
+                required=False,
+                option_type=7
+            )
+        ]
     )
-    async def _shuffle(self, ctx: SlashContext):
-        # if self.kernel_id != ctx.author.id:
-        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
-        # self.kernel_event.set()
-
+    async def _move(self, ctx: SlashContext, channel: discord.VoiceChannel = None):
         voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-        if voice_state.queue.empty():
-            return await ctx.send('Empty Queue.')
-
-        random.shuffle(voice_state.queue._queue)
-        await ctx.send('Queue Shuffled.')
-
-    @cog_ext.cog_slash(
-        name='stop',
-        description='Stops playing music and clears the queue.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _stop(self, ctx: SlashContext):
-        # if self.kernel_id != ctx.author.id:
-        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of privileged mode.')
-        # self.kernel_event.set()
-
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-
-        voice_state.queue._queue.clear()
-        if voice_state.playing():
-            voice_state.voice.stop()
-            await bot.change_presence(activity=None)
-            await ctx.send('Voice State Stopped.')
-
-    @cog_ext.cog_slash(
-        name='leave',
-        description='Clears the queue and leaves the channel.',
-        guild_ids=[id_dict['guild']]
-    )
-    async def _leave(self, ctx: SlashContext):
-        # if self.kernel_id != ctx.author.id:
-        #     raise SlashCommandError(f'{ctx.author.name} cannot execute a privileged command outside of kernel mode.')
-        # self.kernel_event.set()
-
-        voice_state = self.get_voice_state(ctx)
-        await self.ensure_connection(voice_state)
-
-        await voice_state.stop()
-        del self.voice_state[ctx.guild.id]
-        await ctx.send('Disconnected.')
-
-    # @cog_ext.cog_slash(
-    #     name='elevate',
-    #     description='Elevates a member to privileged mode.',
-    #     guild_ids=[id_dict['guild']],
-    #     options=[
-    #         create_option(
-    #             name='member',
-    #             description='user',
-    #             required=True,
-    #             option_type=6
-    #         )
-    #     ]
-    # )
-    async def _elevate(self, ctx: SlashContext, member: discord.User):
-        if self.kernel_id:
-            if self.kernel_id == ctx.author.id:
-                raise SlashCommandError(f'{ctx.author.name} already elevated to privileged mode.')
-            raise SlashCommandError(f'{ctx.author.name} cannot request elevation during lockdown.')
-
-        if not ctx.author.guild_permissions.administrator:
-            member_count = len(bot.get_channel(self.channel.id).members) - 1
-            total = (member_count/2) + 1 if member_count % 2 == 0 else math.ceil(member_count/2)
-            if member.id not in self.kernel_count:
-                self.kernel_count[member.id] = set()
-            if ctx.author.id not in self.kernel_count[member.id]:
-                self.kernel_count[member.id].add(ctx.author.id)
-                vote_count = len(self.kernel_count[member.id])
-                if vote_count < total:
-                    return await ctx.send(f'<@{member.id}> Elevation Vote at **{vote_count}/{total}**.')
-            else:
-                return await ctx.send('Already Voted.')
-
-        self.kernel_id = member.id
-        await ctx.send(f'<@{self.kernel_id}> **elevated** to privileged mode.')
-        try:
-            async with timeout(10):
-                await self.kernel_event.wait()
-        except asyncio.TimeoutError: pass
-        await ctx.send(f'<@{self.kernel_id}> **released** from privileged mode.')
-        self.kernel_event.clear()
-        self.kernel_count.clear()
-        self.kernel_id = None
+        channel = channel or ctx.author.voice.channel
+        if voice_state.voice:
+            await voice_state.voice.move_to(channel)
+        else:
+            voice_state.voice = await channel.connect()
+        await ctx.send(f'Connected to <#{channel.id}>.')
 
     async def ensure_connection(self, voice_state: VoiceState):
         if not voice_state.voice:
@@ -607,7 +438,7 @@ class RemindBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='remind',
-        description='Sets a reminder for a specific date/time.',
+        description='Set a reminder for a specific date/time.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -640,7 +471,7 @@ class RemindBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='sleep',
-        description='Sets a sleep timer to disconnect the member from a voice channel.',
+        description='Set a sleep timer to disconnect from a voice channel.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -701,7 +532,7 @@ class EStatBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='estat',
-        description='Shows emoji statistics for messages and reactions.',
+        description='Show emoji statistics for messages and reactions.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -731,7 +562,7 @@ class WFreqBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='wfreq',
-        description='Shows a list of most frequent words or n-grams.',
+        description='Show a list of most frequent words or n-grams.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -791,7 +622,7 @@ class RoleBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='role',
-        description='Creates a custom role and assigns that role to a member.',
+        description='Create a custom role and assign that role to a someone.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -851,7 +682,7 @@ class PollBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='poll',
-        description='Creates a simple emoji reaction poll.',
+        description='Create a simple emoji reaction poll.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -911,62 +742,6 @@ class PinBot(commands.Cog):
             if not '\U0001F4CC' in (reaction.emoji for reaction in message.reactions):
                 await message.unpin()
 
-class TranslateBot(commands.Cog):
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.api = LibreTranslateAPI('https://translate.argosopentech.com/')
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        confidence, language = 0., 'en'
-        for lang in self.api.detect(message.content):
-            if lang['confidence'] > confidence and lang['language'] in ('de', 'es', 'ru'):
-                confidence, language = lang['confidence'], lang['language']
-        if language != 'en':
-            translation = self.api.translate(message.content, language, 'en')
-            embed = discord.Embed(title=f'Translation [{language.upper()}-EN]', description=translation, color=discord.Color.green())
-            await message.reply(embed=embed)
-
-    @cog_ext.cog_slash(
-        name='translate',
-        description='Translates text from one natural language to another.',
-        guild_ids=[id_dict['guild']],
-            options=[
-                create_option(
-                    name='text',
-                    description='string',
-                    required=True,
-                    option_type=3
-                ),
-                create_option(
-                    name='src',
-                    description='source language (default: auto-detect)',
-                    required=False,
-                    option_type=3
-                ),
-                create_option(
-                    name='tgt',
-                    description='target language (default: en)',
-                    required=False,
-                    option_type=3
-                )
-            ]
-    )
-    async def _translate(self, ctx: SlashContext, text: str, src: str = None, tgt: str = None):
-        if not src:
-            confidence, language = 0., 'en'
-            for lang in self.api.detect(text):
-                if lang['confidence'] > confidence and lang['language'] in ('de', 'es', 'ru'):
-                    confidence, language = lang['confidence'], lang['language']
-            src = language
-        if not tgt: tgt = 'en'
-        if src not in ('de', 'es', 'ru', 'en') or tgt not in ('de', 'es', 'ru', 'en'):
-            return await ctx.send('Unsupported Language.')
-        translation = self.api.translate(text, src, tgt)
-        embed = discord.Embed(title=f'Translation [{src.upper()}-{tgt.upper()}]', description=translation, color=discord.Color.green())
-        await ctx.send(embed=embed)
-
 class InsultBot(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
@@ -975,7 +750,7 @@ class InsultBot(commands.Cog):
 
     @cog_ext.cog_slash(
         name='insult',
-        description='Translates text from one natural language to another.',
+        description='Send a random evil insult to someone.',
         guild_ids=[id_dict['guild']],
             options=[
                 create_option(
@@ -990,29 +765,7 @@ class InsultBot(commands.Cog):
         response = requests.get(self.api_url)
         await ctx.send(f'<@{who.id}> {json.loads(response.text)["insult"]}')
 
-class AnnounceBot(commands.Cog):
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    @cog_ext.cog_slash(
-        name='say',
-        description='Sends an public message, e.g. an announcement.',
-        guild_ids=[id_dict['guild']],
-            options=[
-                create_option(
-                    name='message',
-                    description='string',
-                    required=True,
-                    option_type=3
-                )
-            ]
-    )
-    async def _say(self, ctx: SlashContext, message: str):
-        await ctx.send('Message Sent.', hidden=True)
-        await ctx.channel.send(message)
-
-for cog in (MusicBot, RemindBot, QuoteBot, EStatBot, WFreqBot, RoleBot, PollBot, PinBot, TranslateBot, InsultBot, AnnounceBot):
+for cog in (MusicBot, RemindBot, QuoteBot, EStatBot, RoleBot, PollBot, PinBot, InsultBot):
     bot.add_cog(cog(bot))
 
 @bot.event
