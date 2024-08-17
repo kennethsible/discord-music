@@ -64,7 +64,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return YTDLSource(source, self.channel, self.author, self.data)
 
     @classmethod
-    async def create_source(cls, interaction: discord.Interaction, search: str, *, loop: asyncio.BaseEventLoop = None):
+    async def create_source(cls, interaction: discord.Interaction, search: str, *, loop: asyncio.BaseEventLoop = None, ffmpeg: str = None):
         loop = loop or asyncio.get_event_loop()
         # print(json.dumps(ydl.sanitize_info(info)))
         partial = functools.partial(cls.ytdl.extract_info, url=search, download=False)
@@ -72,10 +72,16 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if 'entries' in data:
             playlist = asyncio.Queue()
             for entry in data['entries']:
-                source = discord.FFmpegPCMAudio(entry['url'], **cls.FFMPEG_OPTS)
+                FFMPEG_OPTS = cls.FFMPEG_OPTS.copy()
+                if ffmpeg:
+                    FFMPEG_OPTS['before_options'] += ' ' + ffmpeg
+                source = discord.FFmpegPCMAudio(entry['url'], **FFMPEG_OPTS)
                 await playlist.put(cls(source, interaction.channel, interaction.user, entry))
             return playlist
-        source = discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTS)
+        FFMPEG_OPTS = cls.FFMPEG_OPTS.copy()
+        if ffmpeg:
+            FFMPEG_OPTS['before_options'] += ' ' + ffmpeg
+        source = discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTS)
         return cls(source, interaction.channel, interaction.user, data)
 
     @staticmethod
@@ -211,6 +217,8 @@ class MusicBot(commands.Cog):
         self.bot = bot
         self.ytmusic = YTMusic()
         self.voice_state = None
+        with open('data/shortcuts.json') as shortcut_file:
+            self.shortcuts = json.load(shortcut_file)
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -218,18 +226,41 @@ class MusicBot(commands.Cog):
             await message.delete()
 
     @app_commands.command(name='play', description='Play a song or video from YouTube.')
-    async def _play(self, interaction: discord.Interaction, search: str, yt_music: bool = False):
+    async def _play(self, interaction: discord.Interaction, search: str, music: bool = False,
+                    timestamp: str = None, duration: str = None, volume: int = None, shortcut: str = None):
         await interaction.response.defer()
         await self.ensure_voice_state(interaction)
         voice_state = self.voice_state
         if not voice_state.voice:
             channel = interaction.user.voice.channel
             voice_state.voice = await channel.connect()
+            voice_state.volume = 0.5
 
-        if yt_music: # YouTube Music
+        ffmpeg = ''
+        if search in self.shortcuts:
+            database = self.shortcuts[search]
+            search = database['search']
+            if timestamp is None and duration is None:
+                ffmpeg = database['ffmpeg']
+        if music:
             search = 'https://music.youtube.com/watch?v=' \
                 + self.ytmusic.search(search, filter='songs')[0]['videoId']
-        source = await YTDLSource.create_source(interaction, search, loop=self.bot.loop)
+        if timestamp:
+            ffmpeg += '-ss ' + timestamp + ' '
+        if duration:
+            ffmpeg += '-t ' + duration
+        if volume:
+            if volume <= 0 or volume > 200:
+                return await interaction.response.send_message(f'Invalid Volume.')
+            voice_state.volume = 0.5 * (volume / 100)
+
+        source = await YTDLSource.create_source(interaction, search, loop=self.bot.loop, ffmpeg=ffmpeg)
+        if duration:
+            source.data['duration'] = int(duration)
+        if shortcut:
+            self.shortcuts[shortcut] = {'search': search, 'ffmpeg': ffmpeg}
+            with open('data/shortcuts.json', 'w') as shortcut_file:
+                json.dump(self.shortcuts, shortcut_file, indent=4)
         if isinstance(source, asyncio.Queue):
             queue_size = 0
             while not source.empty():
@@ -268,7 +299,7 @@ class MusicBot(commands.Cog):
             # return await interaction.response.send_message(f'Current Volume ({int(voice_state.volume * 200)}%).')
             embed = discord.Embed(title='Volume', description=f'\U0001F509 {int(voice_state.volume * 200)}%', color=discord.Color.orange())
             return await interaction.response.send_message(embed=embed)
-        if value < 0 or value > 200:
+        if value <= 0 or value > 200:
             return await interaction.response.send_message(f'Invalid Volume.')
 
         old_value = voice_state.current.volume
