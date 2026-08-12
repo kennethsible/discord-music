@@ -1,0 +1,12 @@
+services:
+    discordmusic:
+      build:
+        context: .
+      container_name: discordmusic
+      environment:
+        DISCORD_TOKEN: ${DISCORD_TOKEN}
+      ports:
+        - 8093:8093
+      volumes:
+        - ./data:/data
+      restart: unless-stopped

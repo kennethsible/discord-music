@@ -1,9 +1,10 @@
-from discord.ext import commands
-from aiohttp import web
 import asyncio
 
-class Server(commands.Cog):
+from aiohttp import web
+from discord.ext import commands
 
+
+class Server(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.site = None
@@ -33,6 +34,7 @@ class Server(commands.Cog):
     def __unload(self):
         asyncio.ensure_future(self.api.stop())
         print('API Server Stopped.')
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Server(bot))

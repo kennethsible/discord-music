@@ -1,9 +1,11 @@
-# from translation.detect import Model
+import json
+import os
+
+import discord
 from discord.ext import commands, tasks
-import discord, json
+
 
 class DiscordBot(commands.Bot):
-
     cogs = (
         'music',
         'quote',
@@ -12,7 +14,6 @@ class DiscordBot(commands.Bot):
         'role',
         'remind',
         'insult',
-        'translate',
         'voice',
         'server',
     )
@@ -22,12 +23,12 @@ class DiscordBot(commands.Bot):
 
     async def setup_hook(self):
         for cog in self.cogs:
-            await self.load_extension('cogs.' + cog)
+            await self.load_extension('discordmusic.cogs.' + cog)
         await bot.tree.sync()
 
     async def on_ready(self):
         print(f'{bot.user.name} Initialized.')
 
+
 bot = DiscordBot()
-with open('data/token.txt') as token:
-    bot.run(token.readline())
+bot.run(os.getenv('DISCORD_TOKEN'))
