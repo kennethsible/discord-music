@@ -31,24 +31,24 @@ class PollBot(commands.Cog):
                         return await message.remove_reaction(payload.emoji, payload.member)
 
     @app_commands.command(name='poll', description='Create an emoji reaction poll.')
-    async def _poll(self, interaction: discord.Interaction, title: str, options: str = None, multiple_choice: bool = False):
-        content = f'**[{"Multi-" if multiple_choice else ""}Poll] {title}**'
-        if options is None:
+    async def _poll(self, interaction: discord.Interaction, question: str, answers: str = None, multiple_answers: bool = False):
+        content = f'**[{"Multi-" if multiple_answers else ""}Poll] {question}**'
+        if answers is None:
             await interaction.response.send_message(content)
             message = await interaction.original_response()
             for emoji in ('\u2705', '\u274E'):
                 await message.add_reaction(emoji)
         else:
-            options = options.split(',')
-            if len(options) > 10:
-                raise app_commands.AppCommandError(f'{interaction.user.name} provided too many options for a poll.')
-            for emoji, option in zip(self.emojis, options):
+            answers = answers.split(',')
+            if len(answers) > 10:
+                raise app_commands.AppCommandError(f'{interaction.user.name} provided too many answers for a poll.')
+            for emoji, option in zip(self.emojis, answers):
                 content += f'\n{emoji} {option.lstrip()}'
             await interaction.response.send_message(content)
             message = await interaction.original_response()
             for i, emoji in enumerate(self.emojis):
                 await message.add_reaction(emoji)
-                if i == len(options) - 1: break
+                if i == len(answers) - 1: break
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PollBot(bot))

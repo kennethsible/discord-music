@@ -1,5 +1,5 @@
-from translation.detect import Model
-from discord.ext import commands
+# from translation.detect import Model
+from discord.ext import commands, tasks
 import discord, json
 
 class DiscordBot(commands.Bot):
@@ -9,9 +9,12 @@ class DiscordBot(commands.Bot):
         'quote',
         'poll',
         'pin',
+        'role',
         'remind',
         'insult',
         'translate',
+        'voice',
+        'server',
     )
 
     def __init__(self):

@@ -13,7 +13,7 @@ class VoiceBot(commands.Cog):
         self.bitrate = 128000 # default bitrate
         self.channels = []
 
-    @app_commands.command(name='channel', description='Customize the settings of a temporary voice channel.')
+    @app_commands.command(name='channel', description='Customize the settings of a voice channel.')
     async def _channel(self, interaction: discord.Interaction, name: str = None, status: str = None, limit: int = None):
         channel = interaction.user.voice.channel
         if channel.id in self.channels:
@@ -25,7 +25,10 @@ class VoiceBot(commands.Cog):
                 await channel.edit(user_limit=limit)
             await interaction.response.send_message(f'Updated Settings for <#{channel.id}>.', delete_after=5)
         else:
-            await interaction.response.send_message(f'Permission Denied for <#{channel.id}>.', delete_after=5)
+            if status and len(status) > 0:
+                await channel.edit(status=status)
+            else:
+                await interaction.response.send_message(f'Permission Denied for <#{channel.id}>.', delete_after=5)
 
     async def create_channel(self, member, category):
         count = len([channel for channel in self.channels if member.nick in channel.name]) + 1

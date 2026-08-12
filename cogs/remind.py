@@ -54,13 +54,18 @@ class RemindBot(commands.Cog):
         self.reminders.append((who_id, interaction.channel.id, what, when.isoformat()))
         with open('data/reminders.json', 'w') as reminders_file:
                 json.dump(list(self.reminders), reminders_file)
-        await interaction.response.send_message(f'<@{who_id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
+        await interaction.response.send_message(f'<@{who_id}> will be reminded at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', ephemeral=True)
 
     @app_commands.command(name='sleep', description='Set a sleep timer to disconnect from a voice channel.')
     async def _sleep(self, interaction: discord.Interaction, when: str):
         when = timezone('EST').localize(parse(when))
         self.sleep_timers.append((interaction.user.id, when))
-        await interaction.response.send_message(f'<@{interaction.user.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.')
+        await interaction.response.send_message(f'<@{interaction.user.id}> will be disconnected at {when.strftime("%I:%M:%S %p")} on {when.strftime("%m-%d-%Y")}.', ephemeral=True)
+
+    # @app_commands.command(name='wakeonlan', description='Send a magic packet to boot PC from a shutdown state.')
+    # async def _wakeonlan(self, interaction: discord.Interaction):
+    #     os.system(f'wakeonlan {id_dict["mac-address"]}')
+    #     await interaction.response.send_message(f'Wake Signal Sent.')
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RemindBot(bot))
