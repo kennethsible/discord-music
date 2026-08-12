@@ -1,4 +1,7 @@
 __pycache__/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+.venv/
 *.pyc
 data/
-translation/
