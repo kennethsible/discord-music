@@ -15,6 +15,8 @@ from ytmusicapi import YTMusic
 with open('/data/id_dict.json') as id_file:
     id_dict = json.load(id_file)
 
+if not discord.opus.is_loaded():
+    discord.opus.load_opus('libopus.so.0')
 
 class VoiceConnectionError(app_commands.AppCommandError):
     pass
